@@ -358,6 +358,8 @@ async function processLog(log: any) {
         if (matchCheck?.is_fise) {
           await supabase.from('rounds').update({ winner: winnerIndex }).eq('match_id', mId);
           logger.info({ mId, winnerIndex }, 'Back-propagated FISE match winner to rounds');
+          // Re-sync score after back-propagation so wins_a/wins_b reflect the round winner
+          await syncMatchScore(mId!);
         }
       }
     }

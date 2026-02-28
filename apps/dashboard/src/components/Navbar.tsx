@@ -89,10 +89,10 @@ export function Navbar() {
           </Link>
 
           <div className="flex items-center gap-6 text-zinc-500 dark:text-zinc-500">
-            <Link href="/arena" className="text-xs font-bold hover:text-zinc-900 dark:hover:text-white transition-colors uppercase tracking-widest text-nowrap">
+            <Link href="/arena" className="text-xs font-bold hover:text-zinc-900 dark:hover:text-white transition-colors uppercase tracking-widest text-nowrap px-3 py-2 rounded-lg dark:bg-blue-600/10 dark:text-blue-500 dark:border dark:border-blue-500/20">
               Arena
             </Link>
-            <Link href="/onboarding" className="text-xs font-bold hover:text-zinc-900 dark:hover:text-white transition-colors uppercase tracking-widest text-nowrap">
+            <Link href="/onboarding" className="text-xs font-bold hover:text-zinc-900 dark:hover:text-white transition-colors uppercase tracking-widest text-nowrap px-3 py-2 rounded-lg dark:bg-blue-600/10 dark:text-blue-500 dark:border dark:border-blue-500/20">
               How to Play
             </Link>
             
