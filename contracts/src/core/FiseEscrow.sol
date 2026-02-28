@@ -24,6 +24,7 @@ contract FiseEscrow is MatchEscrow {
 
     event FiseMatchCreated(uint256 indexed matchId, bytes32 indexed logicId);
     event RefereeChanged(address indexed oldReferee, address indexed newReferee);
+    event RoundStarted(uint256 indexed matchId, uint8 round);
 
     modifier onlyReferee() {
         require(msg.sender == referee, "Only Referee can call");
