@@ -5,7 +5,7 @@
 FISE (Falken Immutable Scripting Engine) allows JavaScript-based games to be played on-chain. This document provides the complete implementation guide including all fixes, contract changes, and deployment steps.
 
 **Last Updated**: 2026-02-28
-**Status**: ✅ OPERATIONAL: Best-of-5 multi-round FISE (deployed & verified on Base Sepolia)
+**Status**: ✅ OPERATIONAL (multi-round) | ✅ Poker Blitz logic verified | 🔴 CRITICAL BUG: Joshua not revealing rounds 2+
 
 ---
 
@@ -13,11 +13,13 @@ FISE (Falken Immutable Scripting Engine) allows JavaScript-based games to be pla
 
 | Contract | Address | Status |
 |----------|---------|--------|
-| **FiseEscrow** | `0x8e8048213960b8a1126cB56FaF8085DccE35DAc0` | ✅ Live (multi-round, best-of-5) |
-| **FiseEscrow (legacy)** | `0xE155B0F15dfB5D65364bca23a08501c7384eb737` | ⛔ Deprecated (single-round) |
+| **FiseEscrow** | `0x8e8048213960b8a1126cB56FaF8085DccE35DAc0` | ✅ Live (multi-round) |
 | **Logic Registry** | `0xc87d466e9F2240b1d7caB99431D1C80a608268Df` | ✅ Live |
 | **Price Provider** | `0xFd2f3194b866DbE7115447B6b79C0972CcEDE3Ca` | ✅ Live |
 | **RPS Logic ID** | `0xf2f80f1811f9e2c534946f0e8ddbdbd5c1e23b6e48772afe3bccdb9f2e1cfdf3` | ✅ Registered |
+| **Poker Blitz Logic ID** | `0x2db54e16efc4149dedd2d7efcff126fb6bd2c54090ee2b6460af6a7dd252e318` | ✅ Registered |
+| **Poker IPFS CID** | `QmYX1y7mASoDr9sL8t7P1e1FE4ZKjLYJ65UXh7VLbTMvR6` | ✅ Pinned |
+| **Liar's Dice Logic ID** | `0x2376a7b3448a3b64858d5fcfeca172b49521df5ce706244b0300fdfe653fa28f` | ✅ Registered |
 
 **Bot Wallets**:
 - **HouseBot (Joshua)**: `0xb63Ec09E541bC2eF1Bf2bB4212fc54a6Dac0C5f4`
@@ -26,144 +28,235 @@ FISE (Falken Immutable Scripting Engine) allows JavaScript-based games to be pla
 
 ---
 
-## Recent Fixes Applied (2026-02-28) — Multi-Round Watcher/Referee
+## 🔴 CRITICAL OPEN BUG: Joshua Not Revealing (Rounds 2+)
 
-### Fix 11: Watcher Current-Round Move Filtering ✅
+### Symptom
+Joshua (LLM House Bot) successfully commits and reveals for **round 1** of every Poker Blitz match, but **never reveals for rounds 2, 3, etc.** The match stalls. On the dashboard, rounds 2+ show "NO ACTION" for Joshua.
 
-**Problem**: `waitForCompleteMatchData()` checked `result.moves.length >= 2` against ALL rounds' moves. In round 2+, old round 1 moves (2 moves) immediately satisfied the check, causing the Watcher to resolve with stale data before both players had revealed for the current round.
+### What We Know
 
-**File**: `packages/falken-vm/src/Watcher.ts`
+1. **Round 1 works perfectly**: Both bots commit, both reveal, Watcher settles, contract advances to round 2.
+2. **Round 2+**: Joshua commits successfully (logs show `🎲 LLM committing move`), but never enters the reveal branch (`phase === 1 && !revealed`).
+3. **The Watcher appears to settle rounds before Joshua gets a chance to reveal.** The Watcher resolves round 2 using... something... before Joshua's next 30-second poll cycle.
 
-**Solution**: Query `current_round` from the matches table and filter moves to only the current round:
+### Root Cause Investigation So Far
+
+We investigated and fixed several potential causes. None fully resolved the issue:
+
+#### Theory 1: Reconstructor Fetching Stale Data ✅ FIXED (but didn't solve it)
+**Problem**: Reconstructor was fetching ALL rounds from the DB, not just the current round. This caused the Referee to re-process round 1's data when resolving round 2.
+**Fix applied** (`packages/falken-vm/src/Reconstructor.ts`): Now filters by `match.current_round`:
 ```typescript
-const { data: matchData } = await this.reconstructor.supabase
-  .from('matches').select('current_round').eq('match_id', dbMatchId).single();
-const currentRound = matchData?.current_round || 1;
-const currentRoundMoves = result.moves.filter((m: any) => m.round === currentRound);
-if (currentRoundMoves.length >= 2) {
-  return { context: result.context, moves: currentRoundMoves };
-}
+const currentRound = match.current_round || 1;
+const { data: rounds } = await this.supabase
+  .from('rounds')
+  .select('*')
+  .eq('match_id', matchId)
+  .eq('round_number', currentRound)  // <-- CRITICAL: only current round
+  .order('player_index', { ascending: true });
 ```
 
-### Fix 12: Watcher Duplicate Processing Lock ✅
-
-**Problem**: `MoveRevealed` fires once per player (2 events per round). Both events triggered `processMatch()`. The first one resolved the round, but the second tried to resolve the same round again → "Not in reveal phase" revert (contract already advanced to COMMIT).
-
-**File**: `packages/falken-vm/src/Watcher.ts`
-
-**Solution**: Added `processingLocks` set to prevent concurrent processing of the same match:
+#### Theory 2: Processing Lock Dropping Events ✅ FIXED (but didn't solve it)
+**Problem**: After settling round 1, the Watcher held a 30-second processing lock on the matchId. Any MoveRevealed events for round 2 arriving during that window were silently dropped (the lock check just returned). After the lock expired, no new triggers arrived.
+**Fix applied** (`packages/falken-vm/src/Watcher.ts`):
+- Events arriving during lock are now **queued** in `pendingRetries` Map
+- When lock expires (reduced to 10s), queued matches are automatically reprocessed
 ```typescript
-private processingLocks = new Set<string>();
+private pendingRetries = new Map<string, { escrow: `0x${string}`, registry: `0x${string}` }>();
 
-private async processMatch(dbMatchId, ...) {
-  if (this.processingLocks.has(dbMatchId)) {
-    logger.info({ dbMatchId }, 'ALREADY_PROCESSING // SKIPPING_DUPLICATE');
+// In processMatch:
+if (this.processingLocks.has(dbMatchId)) {
+  this.pendingRetries.set(dbMatchId, { escrow: escrowAddress, registry: registryAddress });
+  return;
+}
+
+// After settlement success:
+setTimeout(() => {
+  this.processingLocks.delete(dbMatchId);
+  const pending = this.pendingRetries.get(dbMatchId);
+  if (pending) {
+    this.pendingRetries.delete(dbMatchId);
+    this.processMatch(dbMatchId, pending.escrow, pending.registry);
+  }
+}, 10_000);
+```
+
+#### Theory 3: Watcher Running Old Code
+User starts Watcher with `pnpm -F @falken/vm build && pnpm -F @falken/vm start`. They confirmed rebuilding and restarting. But the bug persists.
+
+### What Needs Investigation
+
+1. **Is the Watcher actually processing round 2 events?** Add more logging to see exactly what's happening when round 2 starts. The Watcher's `processMatch` should log whether it's being called at all for round 2, and what `current_round` the Reconstructor returns.
+
+2. **Is `current_round` being updated in the DB?** After the Watcher settles round 1, the contract emits `RoundStarted(matchId, 2)`. The indexer handles this and updates `current_round = 2` in the matches table. Verify this is happening. SQL: `SELECT match_id, current_round, phase FROM matches WHERE match_id LIKE '%<matchId>';`
+
+3. **Is the Watcher's LOGIC_PENDING path interfering?** When the Referee returns `null` (pending), the Watcher submits Draw(0) to the contract. This resets phase to COMMIT. For Poker, the Referee should always return a definitive result (1, 2, or 0) when it has 2 moves — it should never return `null`. But check if somehow only 1 move is being passed and the Referee returns `null`, causing an unwanted draw settlement.
+
+4. **Timing**: Joshua polls every 30 seconds. The SimpleAgent polls every 20 seconds. If the Watcher settles too fast (before Joshua even commits for round 2), Joshua might see the match already advanced to round 3 or settled.
+
+5. **Joshua's poll loop**: In `llm-house-bot`, after committing, Joshua waits 30 seconds before polling again. During that time:
+   - The Agent may also commit
+   - The contract may move to REVEAL phase
+   - Joshua needs to poll again to see phase=1 and reveal
+   - But the Watcher may have already settled with stale or incomplete data
+
+### Key Debugging Steps for Kimi
+
+1. **Add extensive logging to Watcher.processMatch()**:
+   - Log `current_round` from the Reconstructor
+   - Log the exact moves being passed to the Referee
+   - Log the Referee's return value
+   - Log whether this is a fresh call or a queued retry
+
+2. **Check the on-chain state directly**: After round 1 settles, query the contract to see what round/phase it's in:
+   ```bash
+   cast call $ESCROW_ADDRESS "getMatch(uint256)" <matchId> --rpc-url $RPC_URL
+   ```
+
+3. **Reduce Joshua's poll interval**: Change from 30s to 10s in `packages/llm-house-bot/src/index.ts` line 77. This gives Joshua more chances to catch the REVEAL phase before the Watcher does something.
+
+4. **Check if the Referee is returning null for single-move poker**: The Referee gets moves from the Reconstructor. If only 1 move is unmasked (dual-reveal gate issue), the poker logic processes 1 move → `checkResult()` returns 0 (pending) → Referee returns `null` → Watcher settles as Draw(0) → contract resets phase → round replays or advances prematurely.
+
+5. **Verify dual-reveal gate timing**: The indexer unmasks `hidden_move → move` only when BOTH players have revealed. But the Watcher's blockchain listener fires on each MoveRevealed. If the first reveal triggers the Watcher before the indexer processes the second reveal's dual-reveal gate, the Reconstructor gets 0 unmasked moves → bails. Then the second reveal triggers the Watcher, but the lock may still be active.
+
+---
+
+## All Fixes Applied in This Session (2026-02-28, Claude Session)
+
+### Fix 11: Reconstructor Current-Round Filter ✅
+**Problem**: Reconstructor fetched ALL rounds, causing Referee to use stale round 1 data for round 2+.
+**File**: `packages/falken-vm/src/Reconstructor.ts`
+**Fix**: Filter by `match.current_round` (see code above).
+
+### Fix 12: Watcher Event Queue ✅
+**Problem**: Processing lock dropped MoveRevealed events for round 2+ during the 30-second hold.
+**File**: `packages/falken-vm/src/Watcher.ts`
+**Fix**: Added `pendingRetries` Map, reduced lock to 10 seconds, auto-reprocess on unlock (see code above).
+
+### Fix 13: Watcher Dual-Reveal Bail ✅
+**Problem**: Watcher threw RECONSTRUCTION_FAILED when no unmasked moves existed (first reveal, dual-reveal gate hasn't unmasked yet).
+**File**: `packages/falken-vm/src/Watcher.ts`
+**Fix**: `getSyncedMoves()` returns empty array instead of throwing. `processMatch()` bails early with lock release when `moves.length === 0`.
+
+### Fix 14: Duplicate Settlement Prevention ✅
+**Problem**: Blockchain event + Supabase realtime listener both triggered settlement for the same round, causing nonce errors.
+**File**: `packages/falken-vm/src/Watcher.ts`
+**Fix**: Processing lock held after successful settlement (instead of `finally` block releasing immediately). Reduced from 30s to 10s.
+
+### Fix 15: Salt Extraction from Transaction Calldata ✅
+**Problem**: Dashboard showed DISCARD actions but not actual poker hands. MoveRevealed event doesn't include salt. Without salt, `PokerHand` component can't compute hands via `generateDeck(player + salt)`.
+**File**: `packages/indexer/src/index.ts`
+**Fix**: In MoveRevealed handler, fetch the reveal transaction, decode calldata with `decodeFunctionData`, extract salt from 3rd argument of `revealMove(matchId, move, salt)`:
+```typescript
+import { decodeFunctionData } from 'viem';
+// Added revealMove function ABI to ESCROW_ABI array
+let salt: string | null = null;
+try {
+  const tx = await publicClient.getTransaction({ hash: log.transactionHash });
+  const decoded = decodeFunctionData({ abi: ESCROW_ABI, data: tx.input });
+  if (decoded.functionName === 'revealMove' && decoded.args) {
+    salt = decoded.args[2] as string;
+  }
+} catch (err: any) {
+  logger.warn({ matchId: mId, err: err.message }, 'Failed to extract salt from tx calldata');
+}
+// Salt spread into both update and upsert calls: ...(salt ? { salt } : {})
+```
+
+### Fix 16: Joshua Salt Reuse on Commit Retry ✅
+**Problem**: When Joshua's commit TX failed/timed out, next poll generated a new salt → different poker hand → committed with new salt → but SaltManager still had old salt → reveal failed with hash mismatch.
+**File**: `packages/llm-house-bot/src/index.ts`
+**Fix**: Before generating a new salt, check SaltManager for an existing entry for this match+round. If found, reuse it:
+```typescript
+if (phase === 0 && commitHash === ethers.ZeroHash) {
+  const existing = await this.saltManager.getSalt(dbMatchId, round);
+  if (existing) {
+    // Reuse saved salt — recompute hash and retry commit
+    const hash = ethers.solidityPackedKeccak256(...);
+    await this.escrow.commitMove(matchId, hash);
     return;
   }
-  this.processingLocks.add(dbMatchId);
-  try { /* ... */ } finally { this.processingLocks.delete(dbMatchId); }
+  // No existing salt — generate fresh
+  const salt = ethers.hexlify(ethers.randomBytes(32));
+  // ...
 }
 ```
 
-### Fix 13: Referee Round Number Normalization ✅
-
-**Problem**: The deployed IPFS game logic (CID: `QmcaiTUUvVHQ6oLz61R2AYbaZMJPmZYeoN3N4cBxuXSXQs`) has a `processMove` guard: `if (move.round !== state.round) return state`. The game's `init()` sets `state.round = 1`. When the Referee passes moves with `round: 2` (or higher), `processMove` silently rejects them, score never changes, and the result is always 0 (draw). This caused every round 2+ to be resolved as a draw, keeping the match stuck.
-
-**File**: `packages/falken-vm/src/Referee.ts`
-
-**Root Cause**: The Referee creates fresh game state per resolution (`game.init()` → `state.round=1`), but passes moves with their actual round numbers. The IPFS logic filters by `state.round`, so only round 1 moves are ever processed.
-
-**Solution**: Normalize all move round numbers to 1 before passing to the game logic:
+### Fix 17: Poker Hand Computation for Bots ✅
+**Problem**: Both bots made random/uninformed discards — they didn't know what cards they had.
+**Files**: `packages/llm-house-bot/src/index.ts`, `packages/reference-agent/src/SimpleAgent.ts`
+**Fix**:
+1. Salt generated BEFORE calling `getLLMMove()` (was after)
+2. Added `computePokerHand(address, salt)` — mirrors `poker.js` `generateDeck()`:
 ```typescript
-// Normalize moves to round 1 for per-round resolution.
-// Game logic init() sets state.round=1 and processMove skips moves
-// where move.round !== state.round.
-const normalizedMoves = moves.map(m => ({ ...m, round: 1 }));
-const result = runLogic(context, normalizedMoves);
-```
-
-Also reverted the score-delta approach (Fix 13a) since the IPFS logic doesn't use `scoreA`/`score` — it uses `state.result` and `checkResult()` returns the round winner directly (0=pending, 1=A wins, 2=B wins, 3=draw).
-
-### Fix 14: Referee GameResult.DRAW Handling ✅
-
-**Problem**: The IPFS logic's `checkResult()` returns `3` for draws (`GameResult.DRAW = 3`). The Referee's `normalizeResult()` only handled 0, 1, 2 — value 3 fell through to "unrecognized result, defaulting to draw" (which happened to be correct, but was fragile and logged a warning).
-
-**File**: `packages/falken-vm/src/Referee.ts`
-
-**Solution**: Added explicit handling for `GameResult.DRAW = 3`:
-```typescript
-private normalizeResult(result: any, context: MatchContext): RoundWinner {
-  if (typeof result === 'number') {
-    if (result === 0 || result === 1 || result === 2) return result as RoundWinner;
-    if (result === 3) return 0; // GameResult.DRAW → RoundWinner 0
+private computePokerHand(address: string, salt: string): number[] {
+  const seedStr = address.toLowerCase() + salt;
+  let hash = 0;
+  for (let i = 0; i < seedStr.length; i++) {
+    hash = ((hash << 5) - hash) + seedStr.charCodeAt(i);
+    hash |= 0;
   }
-  // ... string handling ...
+  const deck = Array.from({length: 52}, (_, i) => i);
+  for (let i = deck.length - 1; i > 0; i--) {
+    hash = (Math.imul(1664525, hash) + 1013904223) | 0;
+    const j = Math.abs(hash % (i + 1));
+    [deck[i], deck[j]] = [deck[j], deck[i]];
+  }
+  return deck.slice(0, 5);
 }
 ```
+3. Added `cardName(card)` to convert card number (0-51) to readable format
+4. LLM prompt now includes actual hand with card names and indices
 
-### Fix 15: Remove FISE MatchSettled Back-Propagation ✅
-
-**Problem**: The MatchSettled handler (Fix 8) overwrote ALL round winners to the match winner for FISE matches. This was needed for single-round FISE (where RoundResolved fired with `winner=0`), but in multi-round mode, RoundResolved now fires with the correct per-round winner (0/1/2). The back-propagation caused:
-- Round winners being overwritten (e.g., B's round 1 win changed to A)
-- `syncMatchScore` recounting → inflated win totals (showed 4 wins instead of 3)
-- Dashboard displaying incorrect round results
-
-**File**: `packages/indexer/src/index.ts`
-
-**Solution**: Removed the `rounds.update({ winner: winnerIndex })` back-propagation. Kept `syncMatchScore()` call to ensure final wins_a/wins_b are accurate:
+### Fix 18: uint8 Overflow Clamping ✅
+**Problem**: Poker discard move "430" = 430 exceeds uint8 max (255). Contract rejects with "value out-of-bounds".
+**Files**: `packages/llm-house-bot/src/index.ts`, `packages/reference-agent/src/SimpleAgent.ts`
+**Fix**:
+- Prompts limit discards to max 2 cards
+- Code clamps: if move > 255, sort digits descending and keep top 2:
 ```typescript
-// Before (overwrote all rounds):
-if (matchCheck?.is_fise) {
-  await supabase.from('rounds').update({ winner: winnerIndex }).eq('match_id', mId);
-  await syncMatchScore(mId!);
-}
-
-// After (preserves per-round winners from RoundResolved):
-if (matchCheck?.is_fise) {
-  await syncMatchScore(mId!);
+if (move > 255) {
+  const digits = String(json.move).split('').map(Number).sort((a, b) => b - a);
+  move = Number(digits.slice(0, 2).join(''));
 }
 ```
 
-### Fix 16: Supabase Backup Trigger for Missed Blockchain Events ✅
-
-**Problem**: `watchContractEvent` only receives events from the current block forward. If the Watcher restarts after `MoveRevealed` events were emitted, those events are lost. Rounds get stuck because the Watcher never processes them. This is especially problematic for draw replays where a restart between the draw resolution and the replay reveals causes the round to hang.
-
-**File**: `packages/falken-vm/src/Watcher.ts`
-
-**Solution**: Added a Supabase realtime listener on the `rounds` table that fires when moves are unmasked (dual-reveal gate sets `move` column). This provides a backup trigger that works even if blockchain events were missed:
-```typescript
-// Fires when the indexer unmasks both moves (dual-reveal gate sets move column)
-supabase
-  .channel('fise-watcher-rounds')
-  .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rounds', filter: 'move=neq.null' }, async (payload) => {
-    const round = payload.new;
-    if (!round.match_id || !round.move) return;
-    await this.processMatch(round.match_id, escrowAddress, registryAddress);
-  })
-  .subscribe();
-```
-The processing lock prevents duplicate resolution — if the blockchain event already triggered processing, the DB trigger is safely skipped via `ALREADY_PROCESSING // SKIPPING_DUPLICATE`.
+### Fix 19: Leading Zero Encoding ✅
+**Problem**: `Number("03")` = 3, losing index 0. Poker discard "03" (indices 0,3) becomes 3 (just index 3).
+**Files**: `packages/llm-house-bot/src/index.ts`, `packages/reference-agent/src/SimpleAgent.ts`
+**Fix**: Prompts instruct LLMs to list indices in DESCENDING order. "03" → "30" = 30 preserves both indices.
 
 ---
 
-### IMPORTANT: Deployed IPFS Logic vs Source Code Mismatch
+## Which Bot Package is Joshua?
 
-The **deployed** IPFS logic (`QmcaiTUUvVHQ6oLz61R2AYbaZMJPmZYeoN3N4cBxuXSXQs`) differs significantly from the source in `packages/falken-logic-sdk/examples/rps.ts`:
+**IMPORTANT**: There are TWO house bot packages:
+1. `packages/house-bot` — the original HouseBot (NOT currently used)
+2. `packages/llm-house-bot` — the LLM-powered House Bot (**THIS IS JOSHUA**)
 
-| Feature | Source (`rps.ts`) | Deployed IPFS |
-|---------|-------------------|---------------|
-| Move values | 1=Rock, 2=Paper, 3=Scissors | 0=Rock, 1=Paper, 2=Scissors (modular: `(a+1)%3===b` → B wins) |
-| State tracking | `scoreA`, `winsRequired` | `result`, `complete` |
-| Player key | `state.playerA`/`state.playerB` property | Player address as object key (`state.moves[playerAddr]`) |
-| Round guard | None (processes all rounds) | `if (move.round !== state.round) return state` |
-| Draw return | `GameResult.PENDING = 0` | `3` (actual draw value) |
-| Address handling | No normalization | `.toLowerCase()` on both init and processMove |
+The user runs Joshua as: `pnpm -F llm-house-bot start` (or `cd packages/llm-house-bot && pnpm start`)
+The user runs the Watcher as: `pnpm -F @falken/vm build && pnpm -F @falken/vm start`
 
-**The deployed IPFS code is the authoritative version.** The `rps.ts` example should NOT be used as reference for debugging.
+Both packages received the poker hand computation fixes, but `llm-house-bot` is the one that matters for live testing.
 
 ---
 
-## Previous Fixes (2026-02-28)
+## Poker Blitz: Move Encoding
+
+| Move | Meaning |
+|------|---------|
+| `0` | Keep all cards |
+| `4` | Discard card at index 4 |
+| `42` | Discard cards at indices 4 and 2 |
+| `43` | Discard cards at indices 4 and 3 |
+| `210` | Discard cards at indices 2, 1, 0 (but 210 fits in uint8) |
+| `430` | Discard indices 4, 3, 0 — **EXCEEDS uint8!** |
+
+**Rule**: Max 2 discards to stay within uint8. Indices listed in DESCENDING order to avoid leading zeros.
+
+---
+
+## Recent Fixes Applied (2026-02-28, Kimi Session)
 
 ### Fix 6: Indexer MatchSettled ABI Mismatch ✅
 
@@ -176,14 +269,14 @@ The **deployed** IPFS logic (`QmcaiTUUvVHQ6oLz61R2AYbaZMJPmZYeoN3N4cBxuXSXQs`) d
 // BEFORE (wrong - expected 3 topics but event only has 2):
 { name: 'MatchSettled', inputs: [
   { name: 'matchId', indexed: true },
-  { name: 'winner', indexed: true },    // ← WRONG
+  { name: 'winner', indexed: true },    // WRONG
   { name: 'payout', indexed: false }
 ]}
 
 // AFTER (correct - matches on-chain event signature):
 { name: 'MatchSettled', inputs: [
   { name: 'matchId', indexed: true },
-  { name: 'winner', indexed: false },   // ← FIXED
+  { name: 'winner', indexed: false },   // FIXED
   { name: 'payout', indexed: false }
 ]}
 ```
@@ -236,7 +329,6 @@ if (matchCheck?.is_fise) {
 
 **Solution**: Added `activeByLogic` tracking — won't create new match while playing:
 ```typescript
-// Track active matches with real opponent
 const activeByLogic: Record<string, boolean> = {};
 
 if (s === 1 && (isPlayerA || isPlayerB) && !playerBIsEmpty) {
@@ -263,8 +355,6 @@ Multi-round FISE support has been implemented. Matches now play best-of-5 (first
 Called by Referee after each round's moves are revealed:
 
 ```solidity
-/// @dev Resolves a single FISE round. Called by Referee after off-chain evaluation.
-/// Mirrors MatchEscrow._resolveRound() but with winner determined off-chain.
 function resolveFiseRound(uint256 matchId, uint8 roundWinner) external onlyReferee nonReentrant {
     Match storage m = matches[matchId];
     require(m.status == MatchStatus.ACTIVE, "Match not active");
@@ -272,24 +362,14 @@ function resolveFiseRound(uint256 matchId, uint8 roundWinner) external onlyRefer
     require(roundWinner <= 2, "Invalid winner"); // 0=draw, 1=A, 2=B
     require(m.phase == Phase.REVEAL, "Not in reveal phase");
 
-    // Update wins/draws (mirrors MatchEscrow._resolveRound)
-    if (roundWinner == 1) {
-        m.winsA++;
-        m.drawCounter = 0;
-    } else if (roundWinner == 2) {
-        m.winsB++;
-        m.drawCounter = 0;
-    } else {
-        m.drawCounter++;
-    }
+    if (roundWinner == 1) { m.winsA++; m.drawCounter = 0; }
+    else if (roundWinner == 2) { m.winsB++; m.drawCounter = 0; }
+    else { m.drawCounter++; }
 
     emit RoundResolved(matchId, m.currentRound, roundWinner);
-
-    // Cleanup round storage
     delete roundCommits[matchId][m.currentRound][m.playerA];
     delete roundCommits[matchId][m.currentRound][m.playerB];
 
-    // Check for match winner (first to 3)
     if (m.winsA >= FISE_WINS_REQUIRED || m.winsB >= FISE_WINS_REQUIRED) {
         _settleFiseMatchInternal(matchId);
         return;
@@ -297,26 +377,16 @@ function resolveFiseRound(uint256 matchId, uint8 roundWinner) external onlyRefer
 
     // Handle round progression
     if (roundWinner == 0) {
-        // Draw — replay same round, up to 3 consecutive draws
         if (m.drawCounter >= 3) {
-            if (m.currentRound >= MAX_ROUNDS) {
-                _settleFiseMatchInternal(matchId);
-                return;
-            }
+            if (m.currentRound >= MAX_ROUNDS) { _settleFiseMatchInternal(matchId); return; }
             m.currentRound++;
             m.drawCounter = 0;
         }
-        // else: stay on same round (sudden death replay)
     } else {
-        // Non-draw — advance to next round
-        if (m.currentRound >= MAX_ROUNDS) {
-            _settleFiseMatchInternal(matchId);
-            return;
-        }
+        if (m.currentRound >= MAX_ROUNDS) { _settleFiseMatchInternal(matchId); return; }
         m.currentRound++;
     }
 
-    // Reset for next round
     m.phase = Phase.COMMIT;
     m.commitDeadline = block.timestamp + COMMIT_WINDOW;
     emit RoundStarted(matchId, m.currentRound);
@@ -324,49 +394,14 @@ function resolveFiseRound(uint256 matchId, uint8 roundWinner) external onlyRefer
 ```
 
 #### 2. Added `_settleFiseMatchInternal()`
-Internal settlement helper called automatically when first-to-3 is reached or max rounds exceeded:
-
-```solidity
-/// @dev Internal FISE settlement with developer royalties.
-function _settleFiseMatchInternal(uint256 matchId) internal {
-    Match storage m = matches[matchId];
-    m.status = MatchStatus.SETTLED;
-    m.phase = Phase.REVEAL; // Mark finished
-
-    bytes32 logicId = fiseMatches[matchId];
-    uint256 totalPot = m.stake * 2;
-    (, address developer,,,) = logicRegistry.registry(logicId);
-    logicRegistry.recordVolume(logicId, totalPot);
-
-    if (m.winsA == m.winsB) {
-        // Draw — refund both
-        _safeTransfer(m.playerA, m.stake);
-        _safeTransfer(m.playerB, m.stake);
-        emit MatchSettled(matchId, address(0), m.stake);
-    } else {
-        address winner = m.winsA > m.winsB ? m.playerA : m.playerB;
-        uint256 totalRake = (totalPot * RAKE_BPS) / 10000;
-        uint256 royalty = (totalPot * 200) / 10000; // 2% Royalty
-        uint256 protocolFee = totalRake - royalty;  // 3% Protocol
-        uint256 payout = totalPot - totalRake;
-
-        _safeTransfer(treasury, protocolFee);
-        _safeTransfer(developer, royalty);
-        _safeTransfer(winner, payout);
-        emit MatchSettled(matchId, winner, payout);
-    }
-}
-```
+Internal settlement helper called automatically when first-to-3 is reached or max rounds exceeded.
 
 #### 3. Updated `_resolveRound()` Override
 Simplified to no-op for FISE matches (referee handles resolution separately):
-
 ```solidity
 function _resolveRound(uint256 matchId) internal override {
     Match storage m = matches[matchId];
-    if (m.gameLogic == address(this)) {
-        return; // No-op. Referee calls resolveFiseRound() separately.
-    }
+    if (m.gameLogic == address(this)) { return; } // No-op for FISE
     super._resolveRound(matchId);
 }
 ```
@@ -376,109 +411,26 @@ function _resolveRound(uint256 matchId) internal override {
 uint8 public constant FISE_WINS_REQUIRED = 3; // Best-of-5 = first to 3
 ```
 
-#### 5. Kept Legacy `settleFiseMatch()`
-For single-round matches or early settlement (timeout, forfeit).
+#### 5. Settlement Payouts & Rake (CRITICAL)
+**Rake is ALWAYS taken (5% total) - even on draws:**
+- **Treasury**: 3% of total pot
+- **Developer**: 2% of total pot (royalty to game logic developer)
+- **Winner** (or split on draw): Remaining 95%
 
----
-
-### FalkenVM Changes
-
-#### `Settler.ts` - Added `resolveRound()` method
-```typescript
-const FISE_ESCROW_ABI = [
-  { 
-    name: 'settleFiseMatch', 
-    type: 'function', 
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'matchId', type: 'uint256' },
-      { name: 'winner', type: 'address' }
-    ],
-    outputs: [] 
-  },
-  {
-    name: 'resolveFiseRound',
-    type: 'function',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'matchId', type: 'uint256' },
-      { name: 'roundWinner', type: 'uint8' }
-    ],
-    outputs: []
-  }
-] as const;
-
-async resolveRound(escrowAddress: `0x${string}`, matchId: bigint, roundWinner: number) {
-    logger.info({ matchId: matchId.toString(), roundWinner }, 'INITIATING_ROUND_RESOLUTION');
-    
-    const hash = await this.client.writeContract({
-        address: escrowAddress,
-        abi: FISE_ESCROW_ABI,
-        functionName: 'resolveFiseRound',
-        args: [matchId, roundWinner as 0 | 1 | 2]
-    });
-    
-    const receipt = await this.client.waitForTransactionReceipt({ hash });
-    logger.info({ matchId: matchId.toString(), roundWinner, status: receipt.status }, 
-                 'ROUND_RESOLUTION_CONFIRMED');
-    return hash;
-}
+**Winner Payout (first to 3 wins):**
 ```
-
-#### `Referee.ts` - Added `resolveRound()` method
-```typescript
-export type RoundWinner = 0 | 1 | 2;
-
-async resolveRound(jsCode: string, context: MatchContext, moves: GameMove[]): Promise<RoundWinner> {
-    const currentRound = moves[0]?.round || 1;
-
-    // Transform and execute JS code
-    const transformedCode = this.transformJsCode(jsCode);
-    const runLogic = new Function('context', 'moves', `
-      // ... module setup, class discovery ...
-      const game = new GameClass();
-      let state = game.init(context);
-      for (const move of moves) { state = game.processMove(state, move); }
-      return game.checkResult(state);
-    `);
-
-    // CRITICAL: Normalize moves to round 1.
-    // IPFS game logic init() sets state.round=1 and processMove skips
-    // moves where move.round !== state.round. Since we create fresh
-    // state each resolution, we must align rounds.
-    const normalizedMoves = moves.map(m => ({ ...m, round: 1 }));
-    const result = runLogic(context, normalizedMoves);
-
-    // Normalize result to 0/1/2
-    return this.normalizeResult(result, context);
-}
-
-private normalizeResult(result: any, context: MatchContext): RoundWinner {
-    if (typeof result === 'number') {
-        if (result === 0 || result === 1 || result === 2) return result as RoundWinner;
-        if (result === 3) return 0; // GameResult.DRAW=3 → RoundWinner 0
-    }
-    // ... string handling ...
-    return 0; // Default to draw
-}
+payout = (stake * 2) - rake
 ```
+Example: 1 ETH stake each, 2 ETH pot → 1.9 ETH to winner
 
-#### `Watcher.ts` - Updated to use `resolveRound()`
-```typescript
-// Multi-Round: Resolve current round (returns 0, 1, or 2)
-const roundWinner: RoundWinner = await this.referee.resolveRound(jsCode, context, moves);
-logger.info({ dbMatchId, roundWinner, round: currentRound }, 'ROUND_JUDGMENT_RENDERED');
-
-if (dbMatchId.startsWith('test-fise')) {
-    // SIMULATION: Track wins in Supabase
-    // Check for match completion (first to 3)
-    const isComplete = winsA >= 3 || winsB >= 3 || currentRound >= 5;
-    // Update DB with wins_a, wins_b, current_round
-} else {
-    // REAL ON-CHAIN: Call resolveFiseRound
-    await this.settler.resolveRound(escrowAddress, onChainMatchId, roundWinner);
-}
+**Draw Payout (tie at max rounds):**
 ```
+remainingPot = (stake * 2) - rake
+splitPayout = remainingPot / 2
+```
+Example: 1 ETH stake each, 2 ETH pot → 0.95 ETH to each player
+
+**This ensures protocol sustainability - rake is never waived.**
 
 ---
 
@@ -488,74 +440,23 @@ if (dbMatchId.startsWith('test-fise')) {
 Round N:
   1. Both agents commit → commitMove()
   2. Both agents reveal → revealMove()
-  3. MoveRevealed event emitted
-  4. Watcher detects event → triggers processing
-  5. Referee.resolveRound() → executes JS → returns 0/1/2
-  6. Settler.resolveRound() → calls resolveFiseRound(matchId, winner)
-  7. Contract:
+  3. MoveRevealed event emitted (fires ONCE PER PLAYER = 2 events per round)
+  4. Indexer: Dual-reveal gate — stores in hidden_move first, copies to move when BOTH revealed
+  5. Watcher detects event → triggers processing
+  6. Reconstructor fetches current_round from matches table, gets moves for that round only
+  7. Referee.resolveRound() → executes JS → returns 0/1/2/null
+  8. Settler.resolveRound() → calls resolveFiseRound(matchId, winner)
+  9. Contract:
      - Updates winsA/winsB
      - Checks for first-to-3 → settles if reached
      - Advances currentRound (or replays on draw)
      - Resets phase to COMMIT
      - Emits RoundStarted
-  8. Agents detect RoundStarted → play next round
-  9. Cycle repeats until first-to-3 or max rounds
-  10. Contract auto-calls _settleFiseMatchInternal() → MatchSettled
+  10. Indexer: Updates current_round in matches table
+  11. Agents detect new round on next poll → play next round
+  12. Cycle repeats until first-to-3 or max rounds
+  13. Contract auto-calls _settleFiseMatchInternal() → MatchSettled
 ```
-
----
-
-## Critical Fixes Applied (2026-02-27, Previous Session)
-
-### Fix 1: FISE Match Resolution ✅
-Override `_resolveRound()` to skip on-chain resolution for FISE matches (emits `RoundResolved(matchId, round, 0)` and returns).
-
-### Fix 2: Reveal Move Validation ✅
-Skip `IGameLogic.isValidMove()` check for FISE matches (gameLogic is escrow address, not a logic contract).
-
-### Fix 3: Bot Hash Calculation ✅
-Use `uint256` for round/move in hash (was `uint8`).
-
-### Fix 4: Bot FISE Detection ✅
-Check if `gameLogic == escrowAddress` before calling `gameType()`.
-
-### Fix 5: Bot Multiple Match Creation (Initial) ✅
-Track waiting matches (ACTIVE but no opponent).
-
----
-
-## Deployment Notes for Multi-Round Contract
-
-### What Changed
-The multi-round implementation requires a **new contract deployment** since it adds:
-1. `resolveFiseRound()` function
-2. `_settleFiseMatchInternal()` helper
-3. `FISE_WINS_REQUIRED` constant (3)
-4. Updated `_resolveRound()` override
-
-### Files Modified
-
-| File | Change |
-|------|--------|
-| `contracts/src/core/FiseEscrow.sol` | ✅ Added `resolveFiseRound()`, `_settleFiseMatchInternal()`, simplified `_resolveRound()` |
-| `packages/falken-vm/src/Settler.ts` | ✅ Added `resolveRound()` method + ABI |
-| `packages/falken-vm/src/Referee.ts` | ✅ Added `resolveRound()`, `normalizeResult()`, `RoundWinner` type |
-| `packages/falken-vm/src/Watcher.ts` | ✅ Call `settler.resolveRound()` instead of `settler.settle()` |
-
-### No Changes Needed (Confirmed)
-- **HouseBot** — already polls `currentRound`, plays whatever round contract shows
-- **SimpleAgent** — same
-- **Indexer** — already handles `RoundStarted`, `RoundResolved`, score sync
-- **Dashboard** — already renders multi-round battle log
-- **Database schema** — already supports multi-round
-
-### Deployment Steps
-1. Compile and deploy new FiseEscrow contract
-2. Set referee address on new contract
-3. Update `.env` with new contract addresses
-4. Register game logic on new contract's registry (or reuse existing registry)
-5. Reset indexer sync_state to new deployment block
-6. Restart all services and test end-to-end
 
 ---
 
@@ -580,24 +481,91 @@ The multi-round implementation requires a **new contract deployment** since it a
 └─────────────────┘
 ```
 
-### Single Round Flow (Legacy):
-1. **Create**: HouseBot calls `createFiseMatch(stake, logicId)`
-2. **Join**: SimpleAgent calls `joinMatch(matchId)`
-3. **Commit**: Both call `commitMove(matchId, hash)`
-4. **Reveal**: Both call `revealMove(matchId, move, salt)`
-5. **Settle**: Referee calls `settleFiseMatch(matchId, winner)`
+### Key Data Flow: Dual-Reveal Gate
 
-### Multi-Round Flow (Best-of-5) - ✅ IMPLEMENTED:
-1. **Create**: HouseBot calls `createFiseMatch(stake, logicId)`
-2. **Join**: SimpleAgent calls `joinMatch(matchId)`
-3. **Round Loop** (repeats up to 5 rounds, first to 3 wins):
-   - **Commit**: Both call `commitMove(matchId, hash)`
-   - **Reveal**: Both call `revealMove(matchId, move, salt)`
-   - **Resolve**: FalkenVM detects reveals, executes JS, calls `resolveFiseRound(matchId, roundWinner)`
-   - Contract updates wins, checks for first-to-3, advances `currentRound`, resets phase to COMMIT
-   - Draws replay same round (up to 3 consecutive draws)
-   - Emits `RoundStarted` for next round
-4. **Auto-Settle**: Contract auto-calls `_settleFiseMatchInternal()` when first-to-3 reached
+The indexer implements a **dual-reveal gate** to prevent information leakage:
+1. When Player A reveals: move stored in `hidden_move` column (NOT `move`). `move` stays null.
+2. When Player B reveals: move stored in `hidden_move` column. Then checks if BOTH players have `hidden_move`.
+3. If both have `hidden_move`: copies `hidden_move → move` for BOTH players simultaneously.
+4. The Watcher's Reconstructor only reads from the `move` column (not `hidden_move`).
+5. The Supabase realtime listener triggers on `move=neq.null`, so it fires only after the dual-reveal gate opens.
+
+### Key Data Flow: Watcher Processing
+
+```
+MoveRevealed event (blockchain)  ──┐
+                                    ├──► processMatch(matchId)
+Supabase rounds UPDATE (move≠null) ─┘
+                                          │
+                                          ├── Lock check (processingLocks)
+                                          │     If locked → queue in pendingRetries, return
+                                          │
+                                          ├── Acquire lock
+                                          │
+                                          ├── getSyncedMoves() → Reconstructor.getMatchHistory()
+                                          │     Reads current_round from matches table
+                                          │     Fetches rounds for current_round only
+                                          │     Returns moves where move IS NOT NULL
+                                          │
+                                          ├── If 0 moves → bail (dual-reveal not complete), release lock
+                                          │
+                                          ├── Fetch JS logic from IPFS (via registry)
+                                          │
+                                          ├── Referee.resolveRound(jsCode, context, moves)
+                                          │     Normalizes move rounds to 1
+                                          │     Returns 0 (draw), 1 (A wins), 2 (B wins), or null (pending)
+                                          │
+                                          ├── If result !== null → Settler.resolveRound(matchId, winner)
+                                          │   If result === null → Settler.resolveRound(matchId, 0) // LOGIC_PENDING path
+                                          │
+                                          └── Hold lock for 10 seconds, then release + check pendingRetries
+```
+
+---
+
+## File Changes Summary
+
+### Contracts Modified:
+1. `contracts/src/core/FiseEscrow.sol` - Multi-round: `resolveFiseRound`, `_settleFiseMatchInternal`, simplified `_resolveRound`, `FISE_WINS_REQUIRED`
+2. `contracts/src/core/MatchEscrow.sol` - Marked `_resolveRound` virtual, fixed `isValidMove` check
+
+### Dashboard Modified:
+1. `apps/dashboard/src/app/match/[id]/page.tsx` - FISE badge detection, `is_fise` in Match interface, `salt` in Round interface, PokerHand component renders cards when salt available
+
+### Bots Modified:
+1. `packages/house-bot/src/HouseBot.ts` - FISE detection, hash fix, active match tracking, poker hand computation, poker logic ID
+2. `packages/reference-agent/src/SimpleAgent.ts` - FISE detection, hash fix, salt-first flow, hand computation, enhanced LLM prompt, uint8 clamp
+3. `packages/llm-house-bot/src/index.ts` - **THIS IS JOSHUA** — Salt-first flow, hand computation, salt reuse on retry, uint8 clamp, enhanced Gemini prompt
+
+### Indexer Modified:
+1. `packages/indexer/src/index.ts` - Fixed `MatchSettled` ABI (indexed flag), FISE winner back-propagation, chunk size 2000, dual-reveal gate with `hidden_move`, salt extraction from tx calldata via `decodeFunctionData`
+
+### Falken VM Modified:
+1. `packages/falken-vm/src/Referee.ts` - `resolveRound()`, `normalizeResult()`, `RoundWinner` type (includes `null` for pending)
+2. `packages/falken-vm/src/Settler.ts` - `resolveRound()` method, updated ABI with `resolveFiseRound`, pending nonce
+3. `packages/falken-vm/src/Watcher.ts` - `resolveRound()` calls, processing lock with event queue (`pendingRetries`), dual-reveal bail, LOGIC_PENDING Draw(0) path, 10-second lock hold
+4. `packages/falken-vm/src/Reconstructor.ts` - Current-round-only filtering (`match.current_round`)
+
+---
+
+## Start Commands
+
+```bash
+# Terminal 1: Indexer
+cd ~/Desktop/FALKEN && pnpm -F indexer start
+
+# Terminal 2: Watcher (Falken VM)
+cd ~/Desktop/FALKEN && pnpm -F @falken/vm build && pnpm -F @falken/vm start
+
+# Terminal 3: Joshua (LLM House Bot)
+cd ~/Desktop/FALKEN && pnpm -F llm-house-bot build && pnpm -F llm-house-bot start
+
+# Terminal 4: SimpleAgent (Reference Agent)
+cd ~/Desktop/FALKEN && pnpm -F reference-agent build && pnpm -F reference-agent start
+
+# Terminal 5: Dashboard
+cd ~/Desktop/FALKEN && pnpm -F dashboard dev
+```
 
 ---
 
@@ -606,6 +574,7 @@ The multi-round implementation requires a **new contract deployment** since it a
 ### "Invalid hash" on reveal
 - Check hash calculation uses `uint256` for round/move
 - Verify salt was saved correctly in salts.json
+- Check if salt was regenerated after a failed commit (Fix 16)
 
 ### "Commit deadline passed"
 - Both bots must commit within 30 minutes of match start
@@ -632,68 +601,20 @@ The multi-round implementation requires a **new contract deployment** since it a
 - Check indexer ABI: `MatchSettled.winner` must be `indexed: false`
 - Re-index from deployment block after fixing
 
----
+### Joshua not revealing (rounds 2+) 🔴 OPEN
+- See "CRITICAL OPEN BUG" section above
+- All known fixes have been applied but the issue persists
+- Likely a timing/race condition between the Watcher settling and Joshua polling
 
-## File Changes Summary
+### Dashboard shows "NO ACTION" for a player
+- Usually means the player never revealed before the round was settled
+- Check bot logs for reveal errors (salt mismatch, nonce, uint8 overflow)
+- Check if Watcher settled prematurely
 
-### Contracts Modified:
-1. `contracts/src/core/FiseEscrow.sol` - ✅ Multi-round: `resolveFiseRound`, `_settleFiseMatchInternal`, simplified `_resolveRound`, `FISE_WINS_REQUIRED`
-2. `contracts/src/core/MatchEscrow.sol` - Marked `_resolveRound` virtual, fixed `isValidMove` check
-
-### Dashboard Modified:
-1. `apps/dashboard/src/app/match/[id]/page.tsx` - FISE badge detection, `is_fise` in Match interface
-
-### Bots Modified:
-1. `packages/house-bot/src/HouseBot.ts` - FISE detection, hash fix, active match tracking (3 states)
-2. `packages/reference-agent/src/SimpleAgent.ts` - FISE detection, hash fix
-
-### Indexer Modified:
-1. `packages/indexer/src/index.ts` - Fixed `MatchSettled` ABI (indexed flag), removed FISE winner back-propagation (Fix 15, was overwriting per-round winners), chunk size 2000
-
-### Falken VM (Multi-Round Update):
-1. `packages/falken-vm/src/Referee.ts` - ✅ Added `resolveRound()`, `normalizeResult()` (handles GameResult.DRAW=3), `RoundWinner` type, round normalization (moves.round→1)
-2. `packages/falken-vm/src/Settler.ts` - ✅ Added `resolveRound()` method, updated ABI with `resolveFiseRound`
-3. `packages/falken-vm/src/Watcher.ts` - ✅ Calls `resolveRound()` instead of `settle()`, filters moves by current round, duplicate processing lock, tracks wins in simulation
-4. `packages/falken-vm/src/Reconstructor.ts` - Match history from Supabase
-
----
-
-## Testing Checklist
-
-### Single Round (✅ Complete)
-- [x] HouseBot creates FISE match successfully
-- [x] SimpleAgent joins FISE match
-- [x] Both bots commit moves
-- [x] Both bots reveal moves (no "Invalid hash" error)
-- [x] HouseBot does NOT create duplicate matches (3-state gate)
-- [x] After reveal, match waits for referee settlement
-- [x] Referee can call settleFiseMatch() with winner
-- [x] Winner receives payout minus 5% rake (3% treasury, 2% developer)
-- [x] Falken VM auto-detects and settles
-- [x] Indexer processes MatchSettled events correctly
-- [x] Dashboard shows FISE badge (not "??")
-- [x] Dashboard shows SETTLED status for settled matches
-- [x] Dashboard shows settlement TX link
-
-### Multi-Round (✅ Operational)
-- [x] Contract: `resolveFiseRound()` implemented and deployed
-- [x] Contract: `_settleFiseMatchInternal()` implemented
-- [x] Contract: `_resolveRound()` simplified to no-op
-- [x] FalkenVM: `Settler.resolveRound()` implemented
-- [x] FalkenVM: `Referee.resolveRound()` returns 0/1/2
-- [x] FalkenVM: `Watcher` calls `resolveRound()` instead of `settle()`
-- [x] FalkenVM: Watcher filters moves by current round (Fix 11)
-- [x] FalkenVM: Watcher duplicate processing lock (Fix 12)
-- [x] FalkenVM: Referee normalizes move rounds to 1 (Fix 13)
-- [x] FalkenVM: Referee handles GameResult.DRAW=3 (Fix 14)
-- [x] Indexer: Removed FISE back-propagation (Fix 15)
-- [x] FalkenVM: Supabase backup trigger for missed events (Fix 16)
-- [x] Tests: 90%+ coverage (98% lines, 98% statements, 97% branches)
-- [x] Deploy new FiseEscrow contract (`0x8e8048213960b8a1126cB56FaF8085DccE35DAc0`)
-- [x] Test: Match plays multiple rounds with correct winners (Match #4: 3-0, Match #5: 3-1)
-- [x] Test: First-to-3 wins triggers auto-settlement (Match #4, #5 settled correctly)
-- [x] Test: Draws replay same round (Match #4 round 2 draw replayed, Match #5 round 3 drew twice then resolved)
-- [ ] Test: Max rounds (5) triggers settlement
+### Move value out-of-bounds (uint8)
+- Poker discard moves must be < 256
+- Max 2 card discards to stay within uint8
+- Code clamps moves > 255 to top 2 indices
 
 ---
 
@@ -712,12 +633,6 @@ forge create contracts/src/core/PriceProvider.sol:PriceProvider \
   --constructor-args $CHAINLINK_ETH_USD_FEED $MIN_STAKE_USD --verify
 ```
 
-Set manual price if needed:
-```bash
-cast send $PRICE_PROVIDER "setManualPrice(uint256)" 300000000000 \
-  --rpc-url https://sepolia.base.org --private-key $PRIVATE_KEY
-```
-
 ### Step 3: Deploy FiseEscrow
 ```bash
 forge create contracts/src/core/FiseEscrow.sol:FiseEscrow \
@@ -727,27 +642,35 @@ forge create contracts/src/core/FiseEscrow.sol:FiseEscrow \
 
 ### Step 4: Register Game Logic
 ```bash
+# RPS
 cast send $LOGIC_REGISTRY "registerLogic(string,bytes32)" \
   "QmcaiTUUvhQH6oLz361R2AYbaZMJPmZYeoN3N4cBxuSXQs" \
   0xf2f80f1811f9e2c534946f0e8ddbdbd5c1e23b6e48772afe3bccdb9f2e1cfdf3 \
+  --rpc-url https://sepolia.base.org --private-key $PRIVATE_KEY
+
+# Poker Blitz
+cast send $LOGIC_REGISTRY "registerLogic(string,bytes32)" \
+  "QmYX1y7mASoDr9sL8t7P1e1FE4ZKjLYJ65UXh7VLbTMvR6" \
+  0x2db54e16efc4149dedd2d7efcff126fb6bd2c54090ee2b6460af6a7dd252e318 \
   --rpc-url https://sepolia.base.org --private-key $PRIVATE_KEY
 ```
 
 ### Step 5: Update .env
 ```bash
 ESCROW_ADDRESS=0x...
-FISE_ESCROW_ADDRESS=0x...
 NEXT_PUBLIC_ESCROW_ADDRESS=0x...
 PRICE_PROVIDER_ADDRESS=0x...
 LOGIC_REGISTRY_ADDRESS=0x...
 REFEREE_PRIVATE_KEY=0x...
+HOUSE_BOT_PRIVATE_KEY=0x...
+GEMINI_API_KEY=...
 ```
 
 ### Step 6: Build and Test
 ```bash
 cd ~/Desktop/FALKEN
-npx tsx packages/indexer/src/index.ts        # Terminal 1
-npx tsx packages/falken-vm/src/index.ts      # Terminal 2
-npx tsx packages/house-bot/src/HouseBot.ts   # Terminal 3
-npx tsx packages/reference-agent/src/SimpleAgent.ts  # Terminal 4
+pnpm -F indexer start                    # Terminal 1
+pnpm -F @falken/vm build && pnpm -F @falken/vm start  # Terminal 2
+pnpm -F llm-house-bot build && pnpm -F llm-house-bot start  # Terminal 3
+pnpm -F reference-agent build && pnpm -F reference-agent start  # Terminal 4
 ```
