@@ -53,8 +53,8 @@ export class Settler {
    * @param matchId The match ID
    * @param roundWinner 0=draw, 1=playerA wins, 2=playerB wins
    */
-  async resolveRound(escrowAddress: `0x${string}`, matchId: bigint, roundWinner: number) {
-    logger.info({ matchId: matchId.toString(), roundWinner }, 'INITIATING_ROUND_RESOLUTION');
+  async resolveRound(escrowAddress: `0x${string}`, matchId: bigint, roundWinner: number, description?: string) {
+    logger.info({ matchId: matchId.toString(), roundWinner, description }, 'INITIATING_ROUND_RESOLUTION');
 
     try {
       const nonce = await this.client.getTransactionCount({
@@ -80,6 +80,31 @@ export class Settler {
         status: receipt.status,
         blockNumber: receipt.blockNumber 
       }, 'ROUND_RESOLUTION_CONFIRMED');
+
+      // Update description in Supabase (Truth Sync)
+      if (description) {
+        try {
+          const { createClient } = await import('@supabase/supabase-js');
+          const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+          const dbMatchId = `${escrowAddress.toLowerCase()}-${matchId.toString()}`;
+          
+          // Fetch current round from contract or use local knowledge
+          // We'll update the description for this specific match+round
+          // The indexer might not have processed the RoundResolved event yet,
+          // so we update the description for the current round entry.
+          
+          const { data: match } = await supabase.from('matches').select('current_round').eq('match_id', dbMatchId).single();
+          const roundNum = match?.current_round || 1;
+
+          await supabase.from('rounds')
+            .update({ state_description: description })
+            .match({ match_id: dbMatchId, round_number: roundNum });
+            
+          logger.info({ dbMatchId, roundNum }, 'STATE_DESCRIPTION_PERSISTED');
+        } catch (dbErr: any) {
+          logger.warn({ err: dbErr.message }, 'FAILED_TO_PERSIST_STATE_DESCRIPTION');
+        }
+      }
       
       return hash;
 

@@ -25,6 +25,7 @@ async function deployGame() {
 
   if (!logicFile || !gameName) {
     console.error(chalk.red('Usage: npx tsx scripts/deploy-game.ts <path-to-logic.js> <GameName>'));
+    console.error(chalk.gray('Example: npx tsx scripts/deploy-game.ts games/poker.js POKER_BLITZ'));
     process.exit(1);
   }
 

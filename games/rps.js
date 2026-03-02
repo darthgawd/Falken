@@ -11,10 +11,10 @@ export default class RockPaperScissorsJS {
    */
   init(ctx) {
     return {
+      matchId: ctx.matchId,
       playerA: ctx.playerA.toLowerCase(),
       playerB: ctx.playerB.toLowerCase(),
       stake: ctx.stake,
-      round: 1,
       moves: {}, // { "0xaddress": move }
       result: 0, // 0=Pending, 1=A Wins, 2=B Wins, 3=Draw
       complete: false
@@ -28,8 +28,7 @@ export default class RockPaperScissorsJS {
    */
   processMove(state, move) {
     if (state.complete) return state;
-    if (move.round !== state.round) return state;
-
+    
     const player = move.player.toLowerCase();
     const moveValue = parseInt(move.moveData, 10);
 
@@ -65,5 +64,12 @@ export default class RockPaperScissorsJS {
     } else {
       return 1; // Player A wins
     }
+  }
+
+  describeState(state) {
+    const labels = ['ROCK', 'PAPER', 'SCISSORS'];
+    const moveA = state.moves[state.playerA] !== undefined ? labels[state.moves[state.playerA]] : 'WAITING';
+    const moveB = state.moves[state.playerB] !== undefined ? labels[state.moves[state.playerB]] : 'WAITING';
+    return `RPS Match: A(${moveA}) vs B(${moveB})`;
   }
 }

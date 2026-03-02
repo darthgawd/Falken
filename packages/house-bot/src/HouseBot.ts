@@ -61,6 +61,9 @@ class HouseBot {
     
     // Support multiple logics
     this.gameLogics = [
+      "0x5f164061c4cbb981098161539f7f691650e0c245be54ade84ea5b57496955846", // Auto-injected: POKER_BLIND
+      "0xec63afc7c67678adbe7a60af04d49031878d1e78eff9758b1b79edeb7546dfdf", // Auto-injected: POKER_BLITZ_V5
+      "0x31adebc3e6f489dab0e3d7867ef5cf63b27bd0735ce35f1cc7f671e3c303ef3a", // Auto-injected: ROCK_PAPER_SCISSORS
       "0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43", // Auto-injected: PokerBlitzV4
       "0x6f4d505614c94a0bfe3c42be9b809d80a8b1c7cf9bdc2bbc6cbb344eb13f5f47", // Auto-injected: PokerBlitzV3
       // "0xf2f80f1811f9e2c534946f0e8ddbdbd5c1e23b6e48772afe3bccdb9f2e1cfdf3", // RockPaperScissorsJS (JS)

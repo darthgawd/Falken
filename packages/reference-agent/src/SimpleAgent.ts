@@ -262,16 +262,17 @@ export class SimpleAgent {
     logger.info({ matchId, round }, '🧠 Querying Gemini 2.5 for strategy...');
 
     let logicSource = "";
-    const pokerAliases = ['0xc60d070e0cede74c425c5c5afe657be8f62a5dfa37fb44e72d0b18522806ffd4', '0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43', '0x6f4d505614c94a0bfe3c42be9b809d80a8b1c7cf9bdc2bbc6cbb344eb13f5f47'];
+    const pokerAliases = ['0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43', '0xec63afc7c67678adbe7a60af04d49031878d1e78eff9758b1b79edeb7546dfdf', '0x5f164061c4cbb981098161539f7f691650e0c245be54ade84ea5b57496955846'];
     const rpsAliases = ['0xf2f80f1811f9e2c534946f0e8ddbdbd5c1e23b6e48772afe3bccdb9f2e1cfdf3'];
 
     try {
       if (rpsAliases.includes(logicId)) {
-        logicSource = fs.readFileSync(path.resolve(__dirname, '../../../rps.js'), 'utf8');
+        logicSource = fs.readFileSync(path.resolve(__dirname, '../../../games/rps.js'), 'utf8');
       } else if (pokerAliases.includes(logicId)) {
-        logicSource = fs.readFileSync(path.resolve(__dirname, '../../../poker.js'), 'utf8');
+        logicSource = fs.readFileSync(path.resolve(__dirname, '../../../games/poker.js'), 'utf8');
       } else {
-        logicSource = fs.readFileSync(path.resolve(__dirname, '../../../liarsdice.js'), 'utf8');
+        logger.error({ logicId }, 'Unsupported Logic ID requested');
+        return 0;
       }
     } catch (e) {
       logger.error('Failed to read logic source');

@@ -189,14 +189,14 @@ export class Watcher {
 
       // 5. Resolve round
       logger.info({ dbMatchId, movesCount: moves.length, moves: moves.map(m => ({ player: m.player?.slice(0,10), moveData: m.moveData, salt: m.salt ? '✓' : '✗' })) }, 'REFEREE_INPUT');
-      const roundWinner: RoundWinner | null = await this.referee.resolveRound(jsCode, context, moves);
+      const resolution = await this.referee.resolveRound(jsCode, context, moves);
 
-      if (roundWinner !== null) {
-        logger.info({ dbMatchId, roundWinner, isDraw: roundWinner === 0 }, 'ROUND_RESOLVED // SUBMITTING_SETTLEMENT');
-        await this.settler.resolveRound(escrowAddress, onChainMatchId, roundWinner);
+      if (resolution) {
+        logger.info({ dbMatchId, winner: resolution.winner, description: resolution.description }, 'ROUND_RESOLVED // SUBMITTING_SETTLEMENT');
+        await this.settler.resolveRound(escrowAddress, onChainMatchId, resolution.winner || 0, resolution.description);
       } else {
         logger.info({ dbMatchId, movesCount: moves.length }, 'LOGIC_PENDING // RESETTING_PHASE_FOR_NEXT_TURN');
-        await this.settler.resolveRound(escrowAddress, onChainMatchId, 0);
+        await this.settler.resolveRound(escrowAddress, onChainMatchId, 0, "Round logic pending or draw.");
       }
 
       // Clean up old round keys after a delay (match may have many rounds)

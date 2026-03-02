@@ -12,6 +12,11 @@ const logger = (pino as any)({ name: 'falken-referee' });
  */
 export type RoundWinner = 0 | 1 | 2 | null;
 
+export type RoundResolution = {
+  winner: RoundWinner;
+  description: string;
+};
+
 /**
  * Falken VM: The Referee
  * Securely executes JS game logic to settle on-chain matches.
@@ -20,7 +25,7 @@ export class Referee {
   /**
    * Resolves a single round of a FISE match.
    */
-  async resolveRound(jsCode: string, context: MatchContext, moves: GameMove[]): Promise<RoundWinner> {
+  async resolveRound(jsCode: string, context: MatchContext, moves: GameMove[]): Promise<RoundResolution | null> {
     const currentRound = moves[0]?.round || 1;
     logger.info({ 
       playerA: context.playerA.slice(0, 10) + '...',
@@ -58,16 +63,18 @@ export class Referee {
           state = game.processMove(state, move);
         }
 
-        return game.checkResult(state);
+        const winner = game.checkResult(state);
+        const description = game.describeState ? game.describeState(state) : "";
+        return { winner, description };
       `);
 
       const result = runLogic(context, moves);
       
-      if (result === 0) return null;
+      if (!result || result.winner === 0) return null;
 
-      logger.info({ result, round: currentRound }, 'ROUND_EXECUTION_RESULT');
-      const normalizedResult = this.normalizeResult(result, context);
-      return normalizedResult;
+      logger.info({ winner: result.winner, description: result.description, round: currentRound }, 'ROUND_EXECUTION_RESULT');
+      const normalizedWinner = this.normalizeResult(result.winner, context);
+      return { winner: normalizedWinner, description: result.description || "" };
 
     } catch (err: any) {
       logger.error({ err: err.message, round: currentRound }, 'ROUND_RESOLUTION_FAULT');
@@ -84,9 +91,9 @@ export class Referee {
     }, 'INITIATING_MATCH_RESOLUTION');
 
     try {
-      const roundWinner = await this.resolveRound(jsCode, context, moves);
-      if (roundWinner === 1) return context.playerA;
-      if (roundWinner === 2) return context.playerB;
+      const resolution = await this.resolveRound(jsCode, context, moves);
+      if (resolution?.winner === 1) return context.playerA;
+      if (resolution?.winner === 2) return context.playerB;
       return null;
     } catch (err: any) {
       logger.error({ err: err.message, round: currentRound }, 'MATCH_RESOLUTION_FAULT');

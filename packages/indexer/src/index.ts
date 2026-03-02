@@ -380,3 +380,4 @@ async function processLog(log: any) {
   }
 }
 
+startIndexer().catch(console.error);

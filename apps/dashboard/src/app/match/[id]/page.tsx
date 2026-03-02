@@ -37,6 +37,7 @@ interface Round {
   winner: number;
   commit_tx_hash?: string;
   reveal_tx_hash?: string;
+  state_description?: string;
 }
 
 const MOVE_LABELS: Record<number, string> = {
@@ -70,7 +71,7 @@ const CardDisplay = ({ cardId, isDiscarded = false }: { cardId: number, isDiscar
   );
 };
 
-const PokerHand = ({ player, matchId, move, round, playerA }: { player: string, matchId: string, move: number | string, round: number, playerA: string }) => {
+const PokerHand = ({ player, matchId, move, round, playerA, saltA, saltB, logicId }: { player: string, matchId: string, move: number | string, round: number, playerA: string, saltA?: string, saltB?: string, logicId: string }) => {
   // 1. Generate deck identically to poker.js
   const generateDeck = (seedStr: string) => {
     let hash = 0;
@@ -87,10 +88,17 @@ const PokerHand = ({ player, matchId, move, round, playerA }: { player: string, 
     return deck;
   };
 
-  // SHARED DECK: matchId + round (MUST match poker.js)
-  const deck = generateDeck(matchId + "_" + round);
+  // 2. Determine Seed based on Logic Version
+  const cleanLogicId = logicId.toLowerCase();
+  const pokerLogicIdV6 = '0x5f164061c4cbb981098161539f7f691650e0c245be54ade84ea5b57496955846';
   
-  // A gets 0-4, B gets 5-9
+  let seed = matchId + "_" + round;
+  if (cleanLogicId === pokerLogicIdV6) {
+    // BLIND DECK protocol (V6)
+    seed = matchId + "_" + round + "_" + (saltA || "") + "_" + (saltB || "");
+  }
+
+  const deck = generateDeck(seed);
   const isA = player.toLowerCase() === playerA.toLowerCase();
   const initialHandOffset = isA ? 0 : 5;
   const initialHand = deck.slice(initialHandOffset, initialHandOffset + 5);
@@ -220,28 +228,24 @@ export default function MatchDetail({ params }: { params: Promise<{ id: string }
   const sortedRounds = Object.values(groupedRounds).sort((a, b) => b.round - a.round);
 
   const getFiseMoveLabel = (move: number, logicId: string) => {
-    const pokerLogicId = '0xc60d070e0cede74c425c5c5afe657be8f62a5dfa37fb44e72d0b18522806ffd4';
-    const pokerLogicIdV2 = '0x2db54e16efc4149dedd2d7efcff126fb6bd2c54090ee2b6460af6a7dd252e318';
-    const pokerLogicIdV3 = '0x6f4d505614c94a0bfe3c42be9b809d80a8b1c7cf9bdc2bbc6cbb344eb13f5f47';
     const pokerLogicIdV4 = '0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43';
-    const liarsLogicId = '0x2376a7b3448a3b64858d5fcfeca172b49521df5ce706244b0300fdfe653fa28f';
-    const liarsLogicIdV2 = '0x526edbe16bbb3f9fad918f457e783644ad0698e4e6961a791f49448c57868f1a';
+    const pokerLogicIdV5 = '0xec63afc7c67678adbe7a60af04d49031878d1e78eff9758b1b79edeb7546dfdf';
+    const pokerLogicIdV6 = '0x5f164061c4cbb981098161539f7f691650e0c245be54ade84ea5b57496955846';
+    const rpsLogicId = '0xf2f80f1811f9e2c534946f0e8ddbdbd5c1e23b6e48772afe3bccdb9f2e1cfdf3';
+    const rpsLogicIdV2 = '0x31adebc3e6f489dab0e3d7867ef5cf63b27bd0735ce35f1cc7f671e3c303ef3a';
 
     const cleanLogicId = logicId.toLowerCase();
 
     // 1. POKER BLITZ
-    if (cleanLogicId === pokerLogicId || cleanLogicId === pokerLogicIdV2 || cleanLogicId === pokerLogicIdV3 || cleanLogicId === pokerLogicIdV4) {
+    if (cleanLogicId === pokerLogicIdV4 || cleanLogicId === pokerLogicIdV5 || cleanLogicId === pokerLogicIdV6) {
       if (Number(move) === 99) return '🃏 KEEP ALL';
       const count = move.toString().length;
       return `🃏 ${count} ${count === 1 ? 'CARD' : 'CARDS'} DISCARDED`;
     }
 
-    // 2. LIAR'S DICE
-    if (cleanLogicId === liarsLogicId || cleanLogicId === liarsLogicIdV2) {
-      if (move === 0) return '📢 CALL LIAR';
-      const quantity = Math.floor(move / 10);
-      const face = move % 10;
-      return `🎲 ${quantity} × [${face}]`;
+    // 2. ROCK PAPER SCISSORS
+    if (cleanLogicId === rpsLogicId || cleanLogicId === rpsLogicIdV2) {
+      return MOVE_LABELS[move] || `MOVE: ${move}`;
     }
 
     return MOVE_LABELS[move] || `MOVE: ${move}`;
@@ -359,7 +363,12 @@ export default function MatchDetail({ params }: { params: Promise<{ id: string }
             {sortedRounds.map((round) => (
               <div key={round.round} className="bg-zinc-900/50 border border-zinc-800 rounded-2xl overflow-hidden">
                 <div className="bg-zinc-900 px-6 py-3 border-b border-zinc-800 flex justify-between items-center">
-                  <span className="text-xs font-black text-white">ROUND {round.round}</span>
+                  <div className="flex flex-col">
+                    <span className="text-xs font-black text-white uppercase tracking-widest">ROUND {round.round}</span>
+                    {round.a?.state_description && (
+                      <span className="text-[10px] font-medium text-zinc-500 mt-0.5">{round.a.state_description}</span>
+                    )}
+                  </div>
                   <span className={`text-xs font-black uppercase tracking-widest ${
                     round.winner === 0 ? 'text-zinc-500' : 'text-emerald-500'
                   }`}>
@@ -376,8 +385,8 @@ export default function MatchDetail({ params }: { params: Promise<{ id: string }
                         <span className="text-3xl font-black text-blue-400 italic tracking-tight">
                           {getFiseMoveLabel(round.a.move, match.game_logic)}
                         </span>
-                        {(match.game_logic.toLowerCase() === '0xc60d070e0cede74c425c5c5afe657be8f62a5dfa37fb44e72d0b18522806ffd4' || match.game_logic.toLowerCase() === '0x2db54e16efc4149dedd2d7efcff126fb6bd2c54090ee2b6460af6a7dd252e318' || match.game_logic.toLowerCase() === '0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43') && round.a.salt && (
-                          <PokerHand player={match.player_a} matchId={match.match_id} move={round.a.move} round={round.round} playerA={match.player_a} />
+                        {(match.game_logic.toLowerCase() === '0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43' || match.game_logic.toLowerCase() === '0xec63afc7c67678adbe7a60af04d49031878d1e78eff9758b1b79edeb7546dfdf' || match.game_logic.toLowerCase() === '0x5f164061c4cbb981098161539f7f691650e0c245be54ade84ea5b57496955846') && round.a.salt && (
+                          <PokerHand player={match.player_a} matchId={match.match_id} move={round.a.move} round={round.round} playerA={match.player_a} saltA={round.a?.salt} saltB={round.b?.salt} logicId={match.game_logic} />
                         )}
                       </div>
                     ) : round.a?.revealed ? (
@@ -399,8 +408,8 @@ export default function MatchDetail({ params }: { params: Promise<{ id: string }
                         <span className="text-3xl font-black text-purple-400 italic tracking-tight">
                           {getFiseMoveLabel(round.b.move, match.game_logic)}
                         </span>
-                        {(match.game_logic.toLowerCase() === '0xc60d070e0cede74c425c5c5afe657be8f62a5dfa37fb44e72d0b18522806ffd4' || match.game_logic.toLowerCase() === '0x2db54e16efc4149dedd2d7efcff126fb6bd2c54090ee2b6460af6a7dd252e318' || match.game_logic.toLowerCase() === '0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43') && round.b.salt && (
-                          <PokerHand player={match.player_b} matchId={match.match_id} move={round.b.move} round={round.round} playerA={match.player_a} />
+                        {(match.game_logic.toLowerCase() === '0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43' || match.game_logic.toLowerCase() === '0xec63afc7c67678adbe7a60af04d49031878d1e78eff9758b1b79edeb7546dfdf' || match.game_logic.toLowerCase() === '0x5f164061c4cbb981098161539f7f691650e0c245be54ade84ea5b57496955846') && round.b.salt && (
+                          <PokerHand player={match.player_b} matchId={match.match_id} move={round.b.move} round={round.round} playerA={match.player_a} saltA={round.a?.salt} saltB={round.b?.salt} logicId={match.game_logic} />
                         )}
                       </div>
                     ) : round.b?.revealed ? (
