@@ -103,10 +103,38 @@ export default function ArenaPage() {
               </div>
               <ChevronDown className={`w-5 h-5 text-zinc-500 transition-transform duration-300 ${expandedModule === 'registry' ? 'rotate-180' : ''}`} />
             </button>
-            <div className="flex-1 p-4 flex flex-col items-center justify-center text-center space-y-4">
-              <p className="text-xs font-bold uppercase tracking-widest text-zinc-600 dark:text-zinc-300">Querying_Onchain_Logic_Store...</p>
-              <div className="w-full h-[1px] bg-gradient-to-r from-transparent via-purple-500/30 to-transparent" />
-              <button className="text-xs font-black text-purple-600 dark:text-purple-400 uppercase tracking-tighter hover:underline">Explore_FISE_Library</button>
+            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-4">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[9px] font-black text-zinc-400 dark:text-zinc-600 uppercase tracking-widest leading-none">Logic_Repository</span>
+                <div className="px-2 py-0.5 rounded bg-purple-600/5 dark:bg-purple-500/10 border border-purple-600/10 dark:border-purple-500/20 text-[8px] font-bold text-purple-600 dark:text-purple-500 uppercase">Verified</div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-3">
+                {/* Poker V5 */}
+                <div className="group flex flex-col items-center p-0 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/50 hover:border-purple-500/50 transition-all cursor-pointer overflow-hidden aspect-square relative shadow-sm">
+                  <img src="/icons/showdown.png" alt="Showdown Poker" className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
+                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent p-3 pt-8 flex flex-col items-center">
+                    <span className="text-[11px] font-black text-white uppercase tracking-tighter leading-tight drop-shadow-md">Showdown Poker</span>
+                    <span className="text-[8px] font-bold text-purple-400 uppercase tracking-[0.2em] drop-shadow-md">FISE_V5</span>
+                  </div>
+                </div>
+
+                {/* RPS */}
+                <div className="group flex flex-col items-center p-0 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/50 hover:border-purple-500/50 transition-all cursor-pointer overflow-hidden aspect-square relative shadow-sm opacity-60 grayscale hover:grayscale-0 hover:opacity-100">
+                  <div className="w-full h-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-5xl group-hover:scale-110 transition-transform duration-500 pb-4">
+                    ✂️
+                  </div>
+                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent p-3 pt-8 flex flex-col items-center">
+                    <span className="text-[11px] font-black text-white uppercase tracking-tighter leading-tight drop-shadow-md">RPS Duel</span>
+                    <span className="text-[8px] font-bold text-zinc-400 uppercase tracking-[0.2em] drop-shadow-md">FISE_V2</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-4 flex flex-col items-center gap-2">
+                <div className="w-full h-[1px] bg-gradient-to-r from-transparent via-purple-500/20 to-transparent" />
+                <button className="text-[10px] font-black text-purple-600 dark:text-purple-400 uppercase tracking-widest hover:underline pt-2">Explore_Library</button>
+              </div>
             </div>
           </div>
 
