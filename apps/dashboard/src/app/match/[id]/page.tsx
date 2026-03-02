@@ -53,7 +53,7 @@ const MOVE_LABELS: Record<number, string> = {
 };
 
 const CardDisplay = ({ cardId, isDiscarded = false }: { cardId: number, isDiscarded?: boolean }) => {
-  const suits = ['♣', '♦', '♥', '♠'];
+  const suits = ['♣', '♦', '♥', '♠']; // 0=Clubs, 1=Diamonds, 2=Hearts, 3=Spades
   const suitColors = { '♣': 'text-zinc-400', '♦': 'text-blue-500', '♥': 'text-red-500', '♠': 'text-zinc-100' };
   const ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
   
@@ -71,7 +71,7 @@ const CardDisplay = ({ cardId, isDiscarded = false }: { cardId: number, isDiscar
 };
 
 const PokerHand = ({ player, salt, move, round }: { player: string, salt: string, move: number | string, round: number }) => {
-  // 1. Generate deck identically to poker.js
+  // 1. Generate deck identically to poker.js and bots
   const generateDeck = (seedStr: string) => {
     let hash = 0;
     for (let i = 0; i < seedStr.length; i++) {
@@ -87,9 +87,12 @@ const PokerHand = ({ player, salt, move, round }: { player: string, salt: string
     return deck;
   };
 
-  const deck = generateDeck(player.toLowerCase() + salt.toLowerCase());
+  // IMPORTANT: Seed MUST exactly match bots: address.toLowerCase() + salt + round
+  // Bots use lowercase salt from hexlify, but we ensure consistency here.
+  const seed = player.toLowerCase() + salt.toLowerCase() + round;
+  const deck = generateDeck(seed);
   const initialHand = deck.slice(0, 5);
-  const discardIndices = move.toString() === '0' || move.toString() === '' ? [] : move.toString().split('').map(Number);
+  const discardIndices = move.toString() === '99' ? [] : move.toString().split('').map(Number);
   
   let finalHand = [...initialHand];
   let nextIdx = 5;
@@ -221,7 +224,7 @@ export default function MatchDetail({ params }: { params: Promise<{ id: string }
 
     // 1. POKER BLITZ
     if (cleanLogicId === pokerLogicId || cleanLogicId === pokerLogicIdV2) {
-      if (move === 0) return '🃏 KEEP ALL';
+      if (Number(move) === 99) return '🃏 KEEP ALL';
       const count = move.toString().length;
       return `🃏 ${count} ${count === 1 ? 'CARD' : 'CARDS'} DISCARDED`;
     }

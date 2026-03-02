@@ -263,7 +263,7 @@ class LLMHouseBot {
 ${handNames.join('\n')}
 
       IMPORTANT DISCARD RULES:
-      - Respond with "0" to keep all cards
+      - Respond with "99" to keep all cards (IMPORTANT)
       - Discard at most 2 cards (3+ overflows the uint8 move encoding)
       - List indices in DESCENDING order to avoid leading zeros (e.g., "42" not "24", "30" not "03")
       - Discarded cards are replaced from the deck
@@ -294,7 +294,7 @@ ${handNames.join('\n')}
       MOVE FORMAT RULES:
       - If RPS: 0=Rock, 1=Paper, 2=Scissors.
       - If Liar's Dice: 0=Call Liar, or (Quantity * 10 + Face) for a Bid (e.g. 24 = Two 4s).
-      - If Poker Blitz: Digits of indices to DISCARD in DESCENDING order. "0" to keep all. "42" to discard indices 4,2. "30" to discard indices 3,0.
+      - If Poker Blitz: Digits of indices to DISCARD in DESCENDING order. "99" to keep all. "42" to discard indices 4,2. "30" to discard indices 3,0.
 
       Analyze the rules and history. Respond ONLY with a single JSON object:
       {

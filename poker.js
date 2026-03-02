@@ -36,11 +36,11 @@ export default class ShowdownBlitzPoker {
     const player = move.player.toLowerCase();
     
     // Generate Round-Specific Deck (Seed includes round number)
-    const deck = this.generateDeck(player + move.salt);
+    const deck = this.generateDeck(player + move.salt + move.round);
     const initialHand = deck.slice(0, 5);
     
     const moveData = move.moveData.toString();
-    const discardIndices = moveData === '0' ? [] : moveData.split('').map(Number);
+    const discardIndices = moveData === '99' ? [] : moveData.split('').map(Number);
     state.discards[player] = discardIndices;
     
     let finalHand = [...initialHand];
@@ -83,22 +83,19 @@ export default class ShowdownBlitzPoker {
     
     const isFlush = new Set(suits).size === 1;
     
-    // Straight detection (including Ace-low: 12, 3, 2, 1, 0 -> 5, 4, 3, 2, A)
+    // Straight detection
     let isStraight = false;
     let straightHighRank = -1;
-
-    // Normal straight
     const isNormalStraight = ranks.every((r, i) => i === 0 || ranks[i-1] - r === 1);
     if (isNormalStraight) {
       isStraight = true;
       straightHighRank = ranks[0];
     } else if (ranks[0] === 12 && ranks[1] === 3 && ranks[2] === 2 && ranks[3] === 1 && ranks[4] === 0) {
-      // Ace-low straight (5-high)
       isStraight = true;
-      straightHighRank = 3; // The 5 is rank 3
+      straightHighRank = 3;
     }
 
-    let handRank = 0; // High Card
+    let handRank = 0; 
     if (isStraight && isFlush) handRank = 8;
     else if (sortedCounts[0][1] === 4) handRank = 7;
     else if (sortedCounts[0][1] === 3 && sortedCounts[1][1] === 2) handRank = 6;
@@ -108,26 +105,19 @@ export default class ShowdownBlitzPoker {
     else if (sortedCounts[0][1] === 2 && sortedCounts[1][1] === 2) handRank = 2;
     else if (sortedCounts[0][1] === 2) handRank = 1;
 
-    // Score packing: [HandRank:4][Rank1:4][Rank2:4][Rank3:4][Rank4:4][Rank5:4]
-    // For straights, we use the straightHighRank as the first tie-breaker
-    let score = handRank;
+    // FIXED: Score packing [HandRank][Rank1][Rank2][Rank3][Rank4][Rank5]
+    // HandRank is multiplied by 16^5 to stay at the top.
+    let score = handRank * Math.pow(16, 5);
+    
     if (isStraight) {
-      score = (score << 4) | straightHighRank;
-      // Pad remaining bits
-      for (let i = 0; i < 4; i++) score = (score << 4);
+      score += straightHighRank * Math.pow(16, 4);
     } else {
-      // For other hands, use the sortedCounts ranks
+      let power = 4;
       for (let i = 0; i < sortedCounts.length; i++) {
         const [rank, count] = sortedCounts[i];
         for (let j = 0; j < count; j++) {
-          score = (score << 4) | rank;
+          score += rank * Math.pow(16, power--);
         }
-      }
-      // Pad if less than 5 cards (shouldn't happen in 5-card draw)
-      let cardsUsed = 0;
-      sortedCounts.forEach(c => cardsUsed += c[1]);
-      for (let i = cardsUsed; i < 5; i++) {
-        score = (score << 4);
       }
     }
 

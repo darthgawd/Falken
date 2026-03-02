@@ -268,7 +268,7 @@ export class SimpleAgent {
 ${handNames.join('\n')}
 
       IMPORTANT DISCARD RULES:
-      - Respond with "0" to keep all cards
+      - Respond with "99" to keep all cards (IMPORTANT)
       - Discard at most 2 cards (3+ overflows the uint8 move encoding)
       - List indices in DESCENDING order to avoid leading zeros (e.g., "42" not "24", "30" not "03")
       - Discarded cards are replaced from the deck
@@ -297,7 +297,7 @@ ${handNames.join('\n')}
       MOVE FORMAT:
       - RPS: 0=Rock, 1=Paper, 2=Scissors.
       - Liar's Dice: 0=Call Liar, or (Quantity * 10 + Face) for a Bid.
-      - Poker Blitz: String of indices to DISCARD (e.g., "024" to discard cards 0, 2, and 4). Respond with "0" to keep all.
+      - Poker Blitz: String of indices to DISCARD (e.g., "024" to discard cards 0, 2, and 4). Respond with "99" to keep all.
 
       Respond ONLY with a JSON object:
       {
