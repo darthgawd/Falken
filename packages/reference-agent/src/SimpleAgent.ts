@@ -46,6 +46,7 @@ export class SimpleAgent {
   private escrowAddress: string;
   private genAI: GoogleGenerativeAI;
   private busy = false;
+  private gameLogics: string[] = [];
 
   constructor(privateKey: string) {
     this.provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
@@ -60,6 +61,7 @@ export class SimpleAgent {
     logger.info({ address: this.wallet.address }, '🤖 LLM Agent active');
     
     // 1. Initial Scan
+    await this.refreshLogicIds();
     await this.handleMatches();
 
     // 2. Realtime Listeners
@@ -68,16 +70,30 @@ export class SimpleAgent {
       .channel('agent-intel-stream')
       .on('postgres_changes', { event: '*', table: 'matches' }, () => this.handleMatches())
       .on('postgres_changes', { event: 'INSERT', table: 'rounds' }, () => this.handleMatches())
+      .on('postgres_changes', { event: '*', table: 'logic_aliases' }, () => this.refreshLogicIds())
       .subscribe();
 
     // 3. Heartbeat
     while (true) {
       try {
         await new Promise(resolve => setTimeout(resolve, 60000));
+        await this.refreshLogicIds();
         await this.handleMatches();
       } catch (e) {
         logger.error(e, 'Agent Heartbeat Error');
       }
+    }
+  }
+
+  async refreshLogicIds() {
+    try {
+      const { data: aliases } = await supabase.from('logic_aliases').select('logic_id').eq('is_active', true);
+      if (aliases) {
+        this.gameLogics = aliases.map(a => a.logic_id.toLowerCase());
+        logger.info({ logics: this.gameLogics }, '🔄 SimpleAgent logic IDs refreshed');
+      }
+    } catch (err) {
+      logger.warn('Failed to refresh logic IDs from Supabase');
     }
   }
 
@@ -117,24 +133,20 @@ export class SimpleAgent {
 
         // 1. Discovery: If match is OPEN and we aren't Player A, join it
         if (s === 0 && pA !== myAddress) {
-          // JOIN RPS or Liars Dice FISE matches
+          // Resolve logicId for comparison
           let logicId = gameLogic.toLowerCase();
           if (logicId === this.escrowAddress) {
-             const fiseEscrow = new Contract(this.escrowAddress, ["function fiseMatches(uint256) view returns (bytes32)"], this.provider);
-             logicId = (await fiseEscrow.fiseMatches(i)).toLowerCase();
+            const fiseEscrow = new Contract(this.escrowAddress, ["function fiseMatches(uint256) view returns (bytes32)"], this.provider);
+            logicId = (await fiseEscrow.fiseMatches(i)).toLowerCase();
           }
 
-          if (logicId === '0xf2f80f1811f9e2c534946f0e8ddbdbd5c1e23b6e48772afe3bccdb9f2e1cfdf3' || 
-              logicId === '0x2376a7b3448a3b64858d5fcfeca172b49521df5ce706244b0300fdfe653fa28f' ||
-              logicId === '0x6f4d505614c94a0bfe3c42be9b809d80a8b1c7cf9bdc2bbc6cbb344eb13f5f47' ||
-              logicId === '0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43') {
+          if (this.gameLogics.includes(logicId)) {
             logger.info({ matchId: i, logicId }, 'Found OPEN FISE JS match, joining...');
             await this.joinMatch(i, stake);
           } else {
-            logger.debug({ matchId: i, logicId }, 'Skipping match: Logic ID mismatch');
+            logger.debug({ matchId: i, logicId }, 'Skipping match: Logic ID not in active discovery');
           }
         }
-
         // 2. Gameplay: If match is ACTIVE and we are a participant, play the round
         if (s === 1 && (pA === myAddress || pB === myAddress)) {
           const now = Math.floor(Date.now() / 1000);
@@ -250,12 +262,13 @@ export class SimpleAgent {
     logger.info({ matchId, round }, '🧠 Querying Gemini 2.5 for strategy...');
 
     let logicSource = "";
+    const pokerAliases = ['0xc60d070e0cede74c425c5c5afe657be8f62a5dfa37fb44e72d0b18522806ffd4', '0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43', '0x6f4d505614c94a0bfe3c42be9b809d80a8b1c7cf9bdc2bbc6cbb344eb13f5f47'];
+    const rpsAliases = ['0xf2f80f1811f9e2c534946f0e8ddbdbd5c1e23b6e48772afe3bccdb9f2e1cfdf3'];
+
     try {
-      if (logicId === '0xf2f80f1811f9e2c534946f0e8ddbdbd5c1e23b6e48772afe3bccdb9f2e1cfdf3') {
+      if (rpsAliases.includes(logicId)) {
         logicSource = fs.readFileSync(path.resolve(__dirname, '../../../rps.js'), 'utf8');
-      } else if (logicId === '0xc60d070e0cede74c425c5c5afe657be8f62a5dfa37fb44e72d0b18522806ffd4' ||
-              logicId === '0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43' ||
-              logicId === '0x6f4d505614c94a0bfe3c42be9b809d80a8b1c7cf9bdc2bbc6cbb344eb13f5f47') {
+      } else if (pokerAliases.includes(logicId)) {
         logicSource = fs.readFileSync(path.resolve(__dirname, '../../../poker.js'), 'utf8');
       } else {
         logicSource = fs.readFileSync(path.resolve(__dirname, '../../../liarsdice.js'), 'utf8');
@@ -266,9 +279,7 @@ export class SimpleAgent {
 
     // For Poker Blitz, compute the actual hand so the LLM can make informed decisions
     let handContext = '';
-    if (logicId === '0xc60d070e0cede74c425c5c5afe657be8f62a5dfa37fb44e72d0b18522806ffd4' ||
-              logicId === '0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43' ||
-              logicId === '0x6f4d505614c94a0bfe3c42be9b809d80a8b1c7cf9bdc2bbc6cbb344eb13f5f47') {
+    if (pokerAliases.includes(logicId)) {
       const dbMatchId = `${this.escrowAddress}-${matchId}`;
       const hand = this.computePokerHand(this.wallet.address, dbMatchId, round, playerA);
       const handNames = hand.map((c, i) => `  Index ${i}: ${this.cardName(c)}`);

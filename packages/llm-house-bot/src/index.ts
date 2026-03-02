@@ -73,6 +73,7 @@ class LLMHouseBot {
     logger.info({ address: this.wallet.address }, '🤖 LLM House Bot (Joshua) active');
     
     // 1. Initial Scan
+    await this.refreshLogicIds();
     await this.handleMatches();
 
     // 2. Realtime Listeners
@@ -81,16 +82,34 @@ class LLMHouseBot {
       .channel('joshua-llm-swarm')
       .on('postgres_changes', { event: '*', table: 'matches' }, () => this.handleMatches())
       .on('postgres_changes', { event: 'INSERT', table: 'rounds' }, () => this.handleMatches())
+      .on('postgres_changes', { event: '*', table: 'logic_aliases' }, () => this.refreshLogicIds())
       .subscribe();
 
     // 3. Heartbeat
     while (true) {
       try {
         await new Promise(resolve => setTimeout(resolve, 60000));
+        await this.refreshLogicIds();
         await this.handleMatches();
       } catch (e) {
         logger.error(e, 'LLM House Bot Heartbeat Error');
       }
+    }
+  }
+
+  async refreshLogicIds() {
+    try {
+      const { data: aliases } = await supabase.from('logic_aliases').select('logic_id').eq('is_active', true);
+      if (aliases) {
+        const newLogics = aliases.map(a => a.logic_id.toLowerCase());
+        const oldLogics = JSON.stringify(this.gameLogics.sort());
+        if (oldLogics !== JSON.stringify(newLogics.sort())) {
+          this.gameLogics = newLogics;
+          logger.info({ logics: this.gameLogics }, '🔄 Game logic IDs refreshed from Supabase');
+        }
+      }
+    } catch (err) {
+      logger.warn('Failed to refresh logic IDs from Supabase');
     }
   }
 
@@ -248,11 +267,12 @@ class LLMHouseBot {
 
     // 1. Fetch game logic source (local fallback for speed)
     let logicSource = "";
-    if (logicId === '0xf2f80f1811f9e2c534946f0e8ddbdbd5c1e23b6e48772afe3bccdb9f2e1cfdf3') {
+    const pokerAliases = ['0xc60d070e0cede74c425c5c5afe657be8f62a5dfa37fb44e72d0b18522806ffd4', '0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43', '0x6f4d505614c94a0bfe3c42be9b809d80a8b1c7cf9bdc2bbc6cbb344eb13f5f47'];
+    const rpsAliases = ['0xf2f80f1811f9e2c534946f0e8ddbdbd5c1e23b6e48772afe3bccdb9f2e1cfdf3'];
+
+    if (rpsAliases.includes(logicId)) {
       logicSource = fs.readFileSync(path.resolve(__dirname, '../../../rps.js'), 'utf8');
-    } else if (logicId === '0xc60d070e0cede74c425c5c5afe657be8f62a5dfa37fb44e72d0b18522806ffd4' ||
-              logicId === '0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43' ||
-              logicId === '0x6f4d505614c94a0bfe3c42be9b809d80a8b1c7cf9bdc2bbc6cbb344eb13f5f47') {
+    } else if (pokerAliases.includes(logicId)) {
       logicSource = fs.readFileSync(path.resolve(__dirname, '../../../poker.js'), 'utf8');
     } else {
       logicSource = fs.readFileSync(path.resolve(__dirname, '../../../liarsdice.js'), 'utf8');
@@ -260,9 +280,7 @@ class LLMHouseBot {
 
     // 2. Compute poker hand if applicable
     let handContext = '';
-    if (logicId === '0xc60d070e0cede74c425c5c5afe657be8f62a5dfa37fb44e72d0b18522806ffd4' ||
-              logicId === '0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43' ||
-              logicId === '0x6f4d505614c94a0bfe3c42be9b809d80a8b1c7cf9bdc2bbc6cbb344eb13f5f47') {
+    if (pokerAliases.includes(logicId)) {
       const dbMatchId = `${this.escrowAddress}-${matchId}`;
       const hand = this.computePokerHand(this.wallet.address, dbMatchId, round, playerA);
       const handNames = hand.map((c, i) => `  Index ${i}: ${this.cardName(c)}`);

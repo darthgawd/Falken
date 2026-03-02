@@ -147,6 +147,23 @@ async function deployGame() {
      console.log(chalk.yellow(`⚠️ No files modified. They may already contain the Logic ID.`));
   }
 
+  // --- STEP 5: Update Supabase Alias ---
+  console.log(chalk.yellow('\n[5/5] Updating Supabase Logic Alias...'));
+  try {
+    const { createClient } = await import('@supabase/supabase-js');
+    const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const aliasName = gameName.toUpperCase().replace(/\s+/g, '_');
+    
+    const { error } = await supabase
+      .from('logic_aliases')
+      .upsert({ alias_name: aliasName, logic_id: logicId, is_active: true }, { onConflict: 'alias_name' });
+
+    if (error) throw error;
+    console.log(chalk.green(`✅ Alias '${aliasName}' updated to ${logicId}`));
+  } catch (err: any) {
+    console.error(chalk.red(`⚠️ Failed to update Supabase alias: ${err.message}`));
+  }
+
   console.log(chalk.blue.bold('\n🎉 DEPLOYMENT COMPLETE!'));
   console.log(chalk.white(`Logic ID: ${chalk.bold(logicId)}`));
   console.log(chalk.gray(`To activate bots with new logic, restart them: pnpm housebot:start && pnpm agent:start
