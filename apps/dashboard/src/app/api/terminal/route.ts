@@ -4,13 +4,12 @@ import { chatWithFalken, ModelTier } from '@/lib/llm';
 
 export const dynamic = 'force-dynamic';
 
-// Server-side environment variables
-const supabase = createClient(
-  process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-);
-
 export async function POST(req: Request) {
+  const supabase = createClient(
+    process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+    process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+  );
+
   try {
     const { query, managerAddress, tier = 'GPT-4O-MINI' } = await req.json();
 

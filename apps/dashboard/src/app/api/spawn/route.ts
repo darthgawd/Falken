@@ -6,15 +6,14 @@ import { encryptAgentKey } from '@falken/shared-types';
 
 export const dynamic = 'force-dynamic';
 
-// Server-side environment variables
-const supabase = createClient(
-  process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-  process.env.SUPABASE_SERVICE_ROLE_KEY || '' // Use service role for backend operations
-);
-
 const MASTER_ENCRYPTION_KEY = process.env.MASTER_ENCRYPTION_KEY || 'default_key_32_chars_for_dev_only_!!';
 
 export async function POST(req: Request) {
+  const supabase = createClient(
+    process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+    process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+  );
+
   try {
     const body = await req.json();
     console.log('API: Spawn Request received:', body);
