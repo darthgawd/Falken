@@ -24,6 +24,16 @@ interface RoamingAgent {
   nextActionTime: number;
 }
 
+interface MatchNode {
+  id: string;
+  x: number;
+  y: number;
+  playerA: string;
+  playerB: string;
+  stake: string;
+  status: string;
+}
+
 export function FalklandMap() {
   const [matches, setMatches] = useState<MatchNode[]>([]);
   const [roamingAgents, setRoamingAgents] = useState<RoamingAgent[]>([]);
@@ -182,7 +192,7 @@ export function FalklandMap() {
     // Subscribe to real-time updates
     const channel = supabase
       .channel('falkland-map')
-      .on('postgres_changes', { event: '*', table: 'matches' }, fetchMatches)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'matches' }, fetchMatches)
       .subscribe();
 
     return () => {
