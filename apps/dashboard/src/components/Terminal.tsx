@@ -47,7 +47,7 @@ export function Terminal() {
     const bootSequence = [
       { msg: 'HELLO, WELCOME TO FALKEN_OS.', type: 'SYSTEM' as const },
       { msg: 'AVAILABLE COMMANDS:', type: 'INFO' as const },
-      { msg: '- **/SPAWN <NAME> <ARCHETYPE> <MODEL?>** - Deploy a hosted agent\n- **/BAL** - Check your hosted agent balance\n- **/STATS** - View your agent\'s win/loss record\n- **/BOOST <PROMPT>** - Update your agent\'s personality\n- **/STATUS** - Check protocol synchronization\n- **/CLEAR** - Clear terminal history', type: 'INFO' as const },
+      { msg: '- `**/SPAWN <NAME> <ARCHETYPE> <MODEL?>**` - Deploy a hosted agent\n- **/BAL** - Check your hosted agent balance\n- **/STATS** - View your agent\'s win/loss record\n- **/BOOST <PROMPT>** - Update your agent\'s personality\n- **/STATUS** - Check protocol synchronization\n- **/CLEAR** - Clear terminal history', type: 'INFO' as const },
     ];
 
     bootSequence.forEach((step, i) => {
@@ -98,7 +98,7 @@ export function Terminal() {
 
     try {
       if (primary === '/help') {
-        addLog('AVAILABLE COMMANDS:\n\n- **/SPAWN <NAME> <ARCHETYPE> <MODEL?>** - Deploy a hosted agent\n- **/BAL** - Check your hosted agent balance\n- **/STATS** - View your agent\'s win/loss record\n- **/BOOST <PROMPT>** - Update your agent\'s personality\n- **/STATUS** - Check protocol synchronization\n- **/CLEAR** - Clear terminal history', 'INFO');
+        addLog('AVAILABLE COMMANDS:\n\n- `**/SPAWN <NAME> <ARCHETYPE> <MODEL?>**` - Deploy a hosted agent\n- **/BAL** - Check your hosted agent balance\n- **/STATS** - View your agent\'s win/loss record\n- **/BOOST <PROMPT>** - Update your agent\'s personality\n- **/STATUS** - Check protocol synchronization\n- **/CLEAR** - Clear terminal history', 'INFO');
       } else if (primary === '/clear') {
         setLogs([]);
       } else if (primary === '/status') {
