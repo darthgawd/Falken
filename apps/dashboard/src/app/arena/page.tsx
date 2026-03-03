@@ -15,7 +15,7 @@ export default function ArenaPage() {
   const { authenticated, login } = usePrivy();
   const [activeTab, setActiveTab] = useState<'terminal' | 'arena'>('arena');
   const [arenaFilter, setArenaFilter] = useState<'ALL' | 'POKER' | 'RPS'>('ALL');
-  const [expandedModule, setExpandedModule] = useState<'rankings' | 'registry' | 'telemetry' | null>('rankings');
+  const [expandedModule, setExpandedModule] = useState<'rankings' | 'registry' | 'telemetry' | null>(null);
 
   return (
     <main className="h-screen w-screen overflow-hidden flex flex-col bg-zinc-50 dark:bg-[#050505] text-zinc-600 dark:text-zinc-400 font-arena text-base p-4 gap-4 transition-colors duration-500">
@@ -184,7 +184,7 @@ export default function ArenaPage() {
           {/* Module: Terminal (The Command Hub) */}
           <div className="flex-1 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden shadow-sm dark:shadow-2xl bg-[#050505] min-h-[300px] max-h-[500px]">
             <div className="bg-purple-600/10 dark:bg-purple-900/30 px-4 py-3 border-b border-purple-600/20 dark:border-purple-500/20 flex items-center justify-between">
-              <span className="text-[10px] font-black text-purple-600 dark:text-purple-400 uppercase tracking-widest leading-none italic">Operations_Active</span>
+              <span className="text-[10px] font-black text-purple-600 dark:text-purple-400 uppercase tracking-widest leading-none italic">DEPLOY A BOT</span>
             </div>
             <div className="h-[calc(100%-40px)]">
               <Terminal />
