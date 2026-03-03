@@ -220,10 +220,10 @@ export function Terminal() {
         {logs.map((log) => (
           <div key={log.id} className="w-full flex flex-col items-start leading-tight animate-in fade-in slide-in-from-left-2 duration-300 group">
             <div className="w-full flex items-center gap-2 mb-0.5">
-              <span className="text-zinc-400 dark:text-zinc-600 font-bold tabular-nums whitespace-nowrap text-[7px] uppercase">
+              <span className="text-zinc-400 dark:text-zinc-600 font-bold tabular-nums whitespace-nowrap text-[8px] uppercase">
                 [{log.timestamp}]
               </span>
-              <span className={`text-[7px] font-black uppercase tracking-widest ${
+              <span className={`text-[8px] font-black uppercase tracking-widest ${
                 log.type === 'SYSTEM' ? 'text-blue-600 dark:text-blue-500' :
                 log.type === 'ACTION' ? 'text-purple-600 dark:text-purple-500' :
                 log.type === 'ALERT' ? 'text-amber-600 dark:text-yellow-500' :
@@ -232,10 +232,10 @@ export function Terminal() {
               }`}>
                 {log.type}
               </span>
-              <div className="h-[1px] flex-1 bg-zinc-100 dark:bg-zinc-900/30 group-hover:bg-zinc-800 transition-colors" />
+              <div className="h-[1px] flex-1 bg-zinc-100 dark:bg-zinc-900/10 group-hover:bg-zinc-800 transition-colors" />
             </div>
             
-            <div className={`w-full prose prose-xs dark:prose-invert prose-zinc max-w-none break-words font-medium p-2 rounded-sm bg-zinc-500/5 dark:bg-white/5 backdrop-blur-[2px] border-l-2 ${
+            <div className={`w-full max-w-none break-words font-medium p-1.5 rounded-sm bg-zinc-500/5 dark:bg-white/5 backdrop-blur-[2px] border-l-2 ${
               log.type === 'SYSTEM' ? 'border-blue-500/20' :
               log.type === 'ACTION' ? 'border-purple-500/20' :
               log.type === 'ALERT' ? 'border-amber-500/20' :
@@ -253,9 +253,9 @@ export function Terminal() {
           </div>
         ))}
         {isProcessing && (
-          <div className="flex gap-4 items-center animate-pulse py-2">
-            <Loader2 className="w-3 h-3 text-blue-600 dark:text-blue-500 animate-spin" />
-            <span className="text-zinc-400 dark:text-zinc-500 italic text-sm tracking-tight font-medium">Communicating with neural sub-systems...</span>
+          <div className="flex gap-2 items-center animate-pulse py-1">
+            <Loader2 className="w-2.5 h-2.5 text-blue-600 dark:text-blue-500 animate-spin" />
+            <span className="text-zinc-400 dark:text-zinc-500 italic text-[11px] tracking-tight font-medium">Communicating with neural sub-systems...</span>
           </div>
         )}
       </div>

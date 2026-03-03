@@ -36,12 +36,22 @@ const ESCROW_ABI = [
 
 type GameTab = 'ALL' | 'POKER' | 'RPS';
 
-export function MatchFeed() {
+export function MatchFeed({ initialTab = 'ALL', onTabChange }: { initialTab?: GameTab, onTabChange?: (tab: GameTab) => void }) {
   const { authenticated, login } = usePrivy();
   const [matches, setMatches] = useState<Match[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<GameTab>('ALL');
+  const [activeTab, setActiveTab] = useState<GameTab>(initialTab);
   const [isModalOpen, setIsModalOpen] = useState(false);
+
+  // Sync internal state with prop
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
+
+  const handleTabClick = (tab: GameTab) => {
+    setActiveTab(tab);
+    if (onTabChange) onTabChange(tab);
+  };
 
   const { writeContract, data: hash, isPending } = useWriteContract();
   const { isLoading: isConfirming } = useWaitForTransactionReceipt({ hash });
@@ -153,7 +163,7 @@ export function MatchFeed() {
         {(['ALL', 'POKER', 'RPS'] as GameTab[]).map((tab) => (
           <button
             key={tab}
-            onClick={() => setActiveTab(tab)}
+            onClick={() => handleTabClick(tab)}
             className={`text-xs font-black tracking-[0.2em] uppercase transition-all ${
               activeTab === tab ? 'text-blue-600 dark:text-blue-500' : 'text-zinc-300 dark:text-zinc-700 hover:text-zinc-500 dark:hover:text-zinc-500'
             }`}

@@ -14,6 +14,7 @@ import { Terminal as TerminalIcon, Swords, Activity, Zap, ShieldCheck, ChevronDo
 export default function ArenaPage() {
   const { authenticated, login } = usePrivy();
   const [activeTab, setActiveTab] = useState<'terminal' | 'arena'>('arena');
+  const [arenaFilter, setArenaFilter] = useState<'ALL' | 'POKER' | 'RPS'>('ALL');
   const [expandedModule, setExpandedModule] = useState<'rankings' | 'registry' | 'telemetry' | null>('rankings');
 
   return (
@@ -90,14 +91,20 @@ export default function ArenaPage() {
             </button>
             <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
               <div className="grid grid-cols-2 gap-3">
-                <div className="group flex flex-col items-center p-0 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/50 hover:border-purple-500/50 transition-all cursor-pointer overflow-hidden aspect-square relative shadow-sm">
+                <div 
+                  onClick={() => { setActiveTab('arena'); setArenaFilter('POKER'); }}
+                  className="group flex flex-col items-center p-0 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/50 hover:border-purple-500/50 transition-all cursor-pointer overflow-hidden aspect-square relative shadow-sm"
+                >
                   <img src="/icons/showdown.png" alt="Showdown Poker" className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
                   <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent p-2 pt-6 flex flex-col items-center">
                     <span className="text-[10px] font-black text-white uppercase tracking-tighter leading-tight">Showdown</span>
                   </div>
                 </div>
-                <div className="group flex flex-col items-center p-0 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/50 hover:border-purple-500/50 transition-all cursor-pointer overflow-hidden aspect-square relative shadow-sm opacity-60 grayscale hover:grayscale-0 hover:opacity-100">
-                  <div className="w-full h-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-3xl group-hover:scale-110 transition-transform duration-500 pb-4">✂️</div>
+                <div 
+                  onClick={() => { setActiveTab('arena'); setArenaFilter('RPS'); }}
+                  className="group flex flex-col items-center p-0 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/50 hover:border-purple-500/50 transition-all cursor-pointer overflow-hidden aspect-square relative shadow-sm"
+                >
+                  <img src="/icons/rps.png" alt="RPS Duel" className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
                   <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent p-2 pt-6 flex flex-col items-center">
                     <span className="text-[10px] font-black text-white uppercase tracking-tighter leading-tight">RPS Duel</span>
                   </div>
@@ -135,7 +142,7 @@ export default function ArenaPage() {
             <div className="flex-1 overflow-hidden relative">
               {activeTab === 'arena' ? (
                 <div className="absolute inset-0 p-6 overflow-y-auto custom-scrollbar">
-                  <MatchFeed />
+                  <MatchFeed initialTab={arenaFilter} onTabChange={setArenaFilter} />
                 </div>
               ) : (
                 <div className="absolute inset-0 p-10 overflow-y-auto custom-scrollbar">

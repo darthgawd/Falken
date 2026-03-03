@@ -35,24 +35,26 @@ export function HostedAgentStats() {
 
     try {
       // 1. Get Manager Profile
-      const { data: manager } = await supabase
+      const { data: manager, error: mErr } = await supabase
         .from('manager_profiles')
         .select('id')
         .eq('address', activeAddress.toLowerCase())
-        .single();
+        .maybeSingle();
 
+      if (mErr) throw mErr;
       if (!manager) {
         setLoading(false);
         return;
       }
 
       // 2. Get Hosted Agent
-      const { data: agentData } = await supabase
+      const { data: agentData, error: aErr } = await supabase
         .from('hosted_agents')
         .select('*')
         .eq('manager_id', manager.id)
-        .single();
+        .maybeSingle();
 
+      if (aErr) throw aErr;
       if (agentData) {
         setAgent(agentData);
         
