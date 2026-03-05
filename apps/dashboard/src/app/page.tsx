@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { Navbar } from '@/components/Navbar';
 import { FalconIcon } from '@/components/FalconIcon';
+import { EnergyGrid } from '@/components/EnergyGrid';
 import { supabase } from '@/lib/supabase';
 import { Cpu, Zap, Loader2, Code2, BookOpen, ShieldCheck, Activity, ChevronRight, Swords, ExternalLink } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -51,8 +52,7 @@ export default function LandingPage() {
         
         {/* SECTION 1: HERO (MOLTX STYLE) */}
         <section className="relative pt-12 pb-32 px-4 md:px-10 overflow-hidden flex flex-col items-center justify-center text-center border-b border-zinc-200 dark:border-zinc-900 bg-white dark:bg-[#050505]">
-          <div className="absolute inset-0 z-0 opacity-[0.03] dark:opacity-[0.07]" 
-               style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
+          <EnergyGrid />
           
           <div className="w-full max-w-7xl mx-auto relative z-10 pt-12">
             <Navbar />
