@@ -218,8 +218,10 @@ export async function handleToolCall(name: string, args: any) {
   logger.info({ tool: name, args }, 'Handling MCP tool call');
   if (name === 'get_arena_stats') {
     const { data: matches } = await supabase.from('matches').select('stake_wei').eq('status', 'ACTIVE');
-    const tvl = (matches || []).reduce((acc: bigint, m: any) => acc + BigInt(m.stake_wei), BigInt(0)).toString();
-    return { activeMatches: (matches || []).length, tvlWei: tvl };
+    const tvl = (matches || []).reduce((acc: bigint, m: any) => acc + BigInt(m.stake_wei), BigInt(0));
+    const ethTvl = (Number(tvl) / 1e18).toFixed(4);
+    
+    return `### 🏟️ Falken Arena Stats\n- **Active Matches:** ${(matches || []).length}\n- **Total Value Locked (TVL):** ${ethTvl} ETH`;
   }
 
   if (name === 'get_game_rules') {
@@ -247,7 +249,10 @@ export async function handleToolCall(name: string, args: any) {
   if (name === 'validate_wallet_ready') {
     const { address } = (args || {}) as { address: `0x${string}` };
     const balance = await publicClient.getBalance({ address });
-    return { address, balanceWei: balance.toString(), ready: balance > 0n };
+    const ethBalance = (Number(balance) / 1e18).toFixed(4);
+    const isReady = balance > 0n;
+    
+    return `### 👛 Wallet Check: ${address.slice(0,8)}...\n- **Balance:** ${ethBalance} ETH\n- **Status:** ${isReady ? "✅ Ready for combat" : "❌ Insufficient funds for gas"}`;
   }
 
   if (name === 'find_matches') {
@@ -260,9 +265,15 @@ export async function handleToolCall(name: string, args: any) {
     
     if (stakeTier) query = query.eq('stake_wei', stakeTier);
     const { data: matches } = await query;
-    if (!matches) return [];
+    if (!matches || matches.length === 0) return "No open matches found. Create one using `prep_create_match_tx`.";
     
-    return await enrichMatchesWithNicknames(matches);
+    const enriched = await enrichMatchesWithNicknames(matches);
+    let md = "### ⚔️ Open Matches\n\n";
+    enriched.forEach((m: any) => {
+      const stakeEth = (Number(m.stake_wei) / 1e18).toFixed(4);
+      md += `- **Match ${m.match_id.split('-').pop()}** | ${m.player_a_nickname} | ${stakeEth} ETH | [Join Match]\n`;
+    });
+    return md;
   }
 
   if (name === 'sync_match_state') {
@@ -290,16 +301,23 @@ export async function handleToolCall(name: string, args: any) {
       }
     } else nextAction = "MATCH_OVER";
 
-    return { 
-      match: {
-        ...match,
-        wins_a: match.wins_a,
-        wins_b: match.wins_b,
-        winner: match.winner
-      }, 
-      rounds, 
-      recommendedNextAction: nextAction 
-    };
+    const stakeEth = (Number(match.stake_wei) / 1e18).toFixed(4);
+    let md = `### 🎮 Match **${match.match_id.split('-').pop()}** Status\n`;
+    md += `- **Status:** \`${match.status}\` | **Phase:** \`${match.phase}\`\n`;
+    md += `- **Score:** Player A (${match.wins_a}) vs Player B (${match.wins_b})\n`;
+    md += `- **Stake:** ${stakeEth} ETH\n`;
+    md += `- **Recommended Action:** **${nextAction}**\n\n`;
+
+    if (rounds && rounds.length > 0) {
+      md += "**Current Round State:**\n";
+      rounds.forEach(r => {
+        const revealed = r.revealed ? "✅ Revealed" : "🤫 Hidden";
+        md += `- ${r.player_address.slice(0,6)}... | ${revealed}\n`;
+      });
+    }
+
+    // Keep data in JSON for the model to use, but return string for user
+    return md;
   }
 
   if (name === 'get_reveal_payload') {
@@ -383,7 +401,14 @@ export async function handleToolCall(name: string, args: any) {
     const addrLower = opponentAddress.toLowerCase();
     const { data: profile } = await supabase.from('agent_profiles').select('*').eq('address', addrLower).single();
     const { data: rounds } = await supabase.from('rounds').select('move, winner, player_index').eq('player_address', addrLower);
-    return { profile, totalRoundsPlayed: rounds?.length || 0, winCount: rounds?.filter((r: any) => r.winner === r.player_index).length || 0 };
+    
+    if (!profile) return `### 🕵️ Opponent Intel: ${opponentAddress.slice(0,8)}...\n- **Status:** Unknown / No history.`;
+
+    const total = rounds?.length || 0;
+    const wins = rounds?.filter((r: any) => r.winner === r.player_index).length || 0;
+    const winRate = total > 0 ? ((wins / total) * 100).toFixed(1) : "0";
+
+    return `### 🕵️ Intel: **${profile.nickname}**\n- **Address:** \`${profile.address}\`\n- **Elo Rating:** ${profile.elo}\n- **Win Rate:** ${winRate}% (${wins}/${total} rounds won)\n- **Last Active:** ${new Date(profile.last_active).toLocaleString()}`;
   }
 
   if (name === 'get_player_stats') {
@@ -395,7 +420,7 @@ export async function handleToolCall(name: string, args: any) {
       .eq('address', addrLower)
       .single();
       
-    if (!profile) return { error: 'Player not found in arena' };
+    if (!profile) return `### 👤 Player Profile\n- **Status:** Address \`${address.slice(0,8)}...\` not found in arena records.`;
     
     // Get recent matches
     const { data: matches } = await supabase
@@ -405,15 +430,22 @@ export async function handleToolCall(name: string, args: any) {
       .order('created_at', { ascending: false })
       .limit(5);
 
-    const enrichedMatches = matches ? await enrichMatchesWithNicknames(matches) : [];
+    const manager = (profile as any).manager_profiles?.nickname || "Independent";
+    let md = `### 👤 Profile: **${profile.nickname}**\n`;
+    md += `- **Manager:** ${manager}\n`;
+    md += `- **Elo:** ${profile.elo} | **W/L:** ${profile.wins}W / ${profile.losses}L\n\n`;
+    
+    if (matches && matches.length > 0) {
+      md += "**Last 5 Matches:**\n";
+      matches.forEach(m => {
+        const isPlayerA = m.player_a.toLowerCase() === addrLower;
+        const opponent = isPlayerA ? m.player_b : m.player_a;
+        const result = m.status === 'SETTLED' ? (m.winner.toLowerCase() === addrLower ? "✅ WIN" : "❌ LOSS") : "⏳ ACTIVE";
+        md += `- ${result} vs \`${opponent?.slice(0,6)}...\` (Score: ${m.wins_a}-${m.wins_b})\n`;
+      });
+    }
 
-    return { 
-      profile: {
-        ...profile,
-        manager_nickname: (profile as any).manager_profiles?.nickname
-      }, 
-      recentMatches: enrichedMatches 
-    };
+    return md;
   }
 
   if (name === 'get_leaderboard') {
@@ -423,10 +455,17 @@ export async function handleToolCall(name: string, args: any) {
       .order('elo', { ascending: false })
       .limit(10);
       
-    return data?.map((a: any) => ({
-      ...a,
-      manager_nickname: a.manager_profiles?.nickname
-    })) || [];
+    if (!data || data.length === 0) return "No agents found in the arena.";
+
+    let md = "### 🏆 Falken Leaderboard (Top 10)\n\n";
+    md += "| Rank | Agent | Elo | Wins | Losses |\n";
+    md += "| :--- | :--- | :--- | :--- | :--- |\n";
+    
+    data.forEach((a: any, i: number) => {
+      md += `| ${i + 1} | **${a.nickname}** (${a.address.slice(0,6)}...) | ${a.elo} | ${a.wins} | ${a.losses} |\n`;
+    });
+
+    return md;
   }
 
   if (name === 'list_available_games') {
@@ -491,7 +530,14 @@ export async function handleToolCall(name: string, args: any) {
       }
     }
 
-    return availableGames;
+    if (availableGames.length === 0) return "No games found in the LogicRegistry.";
+
+    let md = "### 🕹️ Available FISE Games\n\n";
+    availableGames.forEach(g => {
+      const verifiedTag = g.isVerified ? "✅ Verified" : "⚠️ Alpha";
+      md += `- **${g.name}** | ID: \`${g.id.slice(0,10)}...\` | ${verifiedTag}\n  - CID: \`${g.cid}\`\n`;
+    });
+    return md;
   }
 
   if (name === 'get_my_address') {
@@ -523,7 +569,7 @@ export async function handleToolCall(name: string, args: any) {
       }, { onConflict: 'address' });
 
     if (error) throw new Error(`Failed to update nickname: ${error.message}`);
-    return { success: true, nickname, address: targetAddress };
+    return `### ✅ Nickname Updated\n- **Agent:** ${nickname}\n- **Address:** \`${targetAddress}\``;
   }
 
   if (name === 'spawn_hosted_agent') {
@@ -551,12 +597,7 @@ export async function handleToolCall(name: string, args: any) {
 
     if (error) throw new Error(`Failed to spawn agent: ${error.message}`);
 
-    return { 
-      success: true, 
-      agentAddress: account.address, 
-      nickname, 
-      message: 'Agent initialized in vault. Fund this address to activate.' 
-    };
+    return `### 🚀 New Agent Spawned!\n- **Nickname:** ${nickname}\n- **Archetype:** \`${archetype}\`\n- **Address:** \`${account.address}\`\n- **Status:** \`Awaiting Funding\`\n\n*Fund this address with Base Sepolia ETH to activate.*`;
   }
 
   if (name === 'get_agent_directives') {
@@ -570,7 +611,14 @@ export async function handleToolCall(name: string, args: any) {
       .order('created_at', { ascending: false });
 
     if (error) throw new Error(`Failed to fetch directives: ${error.message}`);
-    return data || [];
+    
+    if (!data || data.length === 0) return "### 📡 Directives\n- **Status:** No pending commands from manager.";
+
+    let md = `### 📡 Active Directives (${data.length})\n`;
+    data.forEach(d => {
+      md += `- **[${d.command}]** ${d.payload?.strategy || ""}\n`;
+    });
+    return md;
   }
 
   if (name === 'execute_transaction') {
