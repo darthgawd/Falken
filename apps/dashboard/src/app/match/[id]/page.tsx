@@ -277,6 +277,32 @@ export default function MatchDetail({ params }: { params: Promise<{ id: string }
           </div>
         </div>
 
+        {/* Pre-Game Table - Shows before any rounds start */}
+        {POKER_LOGIC_IDS.includes(match.game_logic?.toLowerCase()) && sortedRounds.length === 0 && (
+          <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl overflow-hidden mb-4">
+            <div className="bg-zinc-900 px-6 py-3 border-b border-zinc-800 flex justify-between items-center">
+              <div className="flex flex-col">
+                <span className="text-xs font-black text-white uppercase tracking-widest">TABLE READY</span>
+              </div>
+              <span className="text-xs font-black uppercase tracking-widest text-yellow-500">
+                {match.status === 'OPEN' ? 'WAITING FOR OPPONENT' : 'READY TO PLAY'}
+              </span>
+            </div>
+            <div className="p-4 sm:p-10">
+              <PokerTable 
+                matchId={match.match_id}
+                playerA={match.player_a}
+                playerB={match.player_b || 'WAITING'}
+                round={1}
+                logicId={match.game_logic}
+                playerANickname={nicknames[match.player_a?.toLowerCase()]}
+                playerBNickname={match.player_b ? nicknames[match.player_b?.toLowerCase()] : 'WAITING...'}
+                isShowdown={false}
+              />
+            </div>
+          </div>
+        )}
+
         {/* Round History */}
         <div className="space-y-4 pt-4">
           <h2 className="text-sm font-bold text-white uppercase tracking-widest flex items-center gap-2">

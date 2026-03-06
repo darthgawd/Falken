@@ -172,9 +172,14 @@ export const PokerTable = ({
         <div className="absolute top-[6%] left-1/2 -translate-x-1/2 flex flex-col items-center w-full px-4">
           <div className="mb-2 sm:mb-4 flex flex-col items-center">
             <span className="text-[10px] sm:text-xs font-black text-white/40 uppercase tracking-[0.2em] mb-1">RIVAL</span>
-            <div className="bg-black/40 backdrop-blur-md border border-white/10 px-3 sm:px-4 py-1 rounded-full text-white font-bold text-xs sm:text-sm">
-              {playerBNickname || playerB.slice(0, 6)}
+            <div className={`backdrop-blur-md border px-3 sm:px-4 py-1 rounded-full text-white font-bold text-xs sm:text-sm ${playerB === 'WAITING' || playerBNickname === 'WAITING...' ? 'bg-yellow-500/20 border-yellow-500/40 text-yellow-400' : 'bg-black/40 border-white/10'}`}>
+              {playerBNickname || playerB?.slice(0, 6) || 'Unknown'}
             </div>
+            {(playerB === 'WAITING' || playerBNickname === 'WAITING...') && (
+              <div className="mt-1 text-[8px] sm:text-[10px] font-black text-yellow-500 uppercase tracking-widest bg-yellow-500/10 px-2 py-0.5 rounded border border-yellow-500/20 animate-pulse">
+                WAITING TO JOIN
+              </div>
+            )}
             {showB && (
               <div className="mt-1 flex flex-col items-center gap-1">
                 <div className="text-[8px] sm:text-[10px] font-black text-blue-400 uppercase tracking-widest bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
@@ -242,7 +247,7 @@ export const PokerTable = ({
               )}
             </div>
             <div className="bg-black/40 backdrop-blur-md border border-white/10 px-3 sm:px-4 py-1 rounded-full text-white font-bold text-xs sm:text-sm">
-              {playerANickname || playerA.slice(0, 6)}
+              {playerANickname || playerA?.slice(0, 6) || 'Unknown'}
             </div>
             <span className="mt-1 text-[10px] sm:text-xs font-black text-white/40 uppercase tracking-[0.2em]">INITIATOR (YOU)</span>
           </div>
