@@ -155,6 +155,7 @@ async function enrichMatchesWithNicknames(matches: any[]) {
       ...m,
       player_a_nickname: playerNicknames[0] || 'Unknown',
       player_b_nickname: playerNicknames[1] || null,
+      player_nicknames: playerNicknames,
       player_count: (m.players || []).length
     };
   });
@@ -168,6 +169,32 @@ const ESCROW_ABI = [
   { name: 'claimTimeout', type: 'function', stateMutability: 'nonpayable', inputs: [{ name: '_matchId', type: 'uint256' }], outputs: [] },
   { name: 'mutualTimeout', type: 'function', stateMutability: 'nonpayable', inputs: [{ name: '_matchId', type: 'uint256' }], outputs: [] },
   { name: 'withdraw', type: 'function', stateMutability: 'nonpayable', inputs: [], outputs: [] },
+  {
+    name: 'getMatch',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'matchId', type: 'uint256' }],
+    outputs: [{
+      name: '',
+      type: 'tuple',
+      components: [
+        { name: 'players', type: 'address[]' },
+        { name: 'stake', type: 'uint256' },
+        { name: 'totalPot', type: 'uint256' },
+        { name: 'logicId', type: 'bytes32' },
+        { name: 'maxPlayers', type: 'uint8' },
+        { name: 'currentRound', type: 'uint8' },
+        { name: 'wins', type: 'uint8[]' },
+        { name: 'drawCounter', type: 'uint8' },
+        { name: 'phase', type: 'uint8' },
+        { name: 'status', type: 'uint8' },
+        { name: 'commitDeadline', type: 'uint256' },
+        { name: 'revealDeadline', type: 'uint256' },
+        { name: 'winner', type: 'address' }
+      ]
+    }]
+  },
+  { name: 'getRoundStatus', type: 'function', stateMutability: 'view', inputs: [{ name: 'matchId', type: 'uint256' }, { name: 'round', type: 'uint8' }, { name: 'player', type: 'address' }], outputs: [{ name: 'commitHash', type: 'bytes32' }, { name: 'revealed', type: 'bool' }] },
 ] as const;
 
 const LOGIC_REGISTRY_ABI = [
@@ -281,8 +308,10 @@ export async function handleToolCall(name: string, args: any) {
     const enriched = await enrichMatchesWithNicknames(matches);
     let md = "### ⚔️ Open Matches\n\n";
     enriched.forEach((m: any) => {
-      const stakeEth = (Number(m.stake_wei) / 1e18).toFixed(4);
-      md += `- **Match ${m.match_id.split('-').pop()}** | ${m.player_a_nickname} | ${stakeEth} ETH | [Join Match]\n`;
+      const stakeUsdc = (Number(m.stake_wei) / 1e6).toFixed(2);
+      const playerList = m.player_nicknames?.join(', ') || 'Waiting for players';
+      const playerCount = `${m.player_count || 0}/${m.max_players || 2}`;
+      md += `- **Match ${m.match_id.split('-').pop()}** | ${playerList} | ${stakeUsdc} USDC | ${playerCount} players | [Join Match]\n`;
     });
     return md;
   }

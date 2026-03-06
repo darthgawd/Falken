@@ -183,6 +183,99 @@ abstract contract MatchEscrow is ReentrancyGuard, Ownable, Pausable {
     function _resolveRound(uint256 matchId) internal virtual;
 
     /**
+     * @dev Allows a player to claim win if opponent times out.
+     * Can be called during COMMIT phase (opponent didn't commit) or REVEAL phase (opponent didn't reveal).
+     */
+    function claimTimeout(uint256 matchId) external nonReentrant whenNotPaused {
+        Match storage m = matches[matchId];
+        require(m.status == MatchStatus.ACTIVE, "Not active");
+        require(_isPlayer(matchId, msg.sender), "Not participant");
+        
+        bool isCommitTimeout = (m.phase == Phase.COMMIT && block.timestamp > m.commitDeadline);
+        bool isRevealTimeout = (m.phase == Phase.REVEAL && block.timestamp > m.revealDeadline);
+        require(isCommitTimeout || isRevealTimeout, "Not timed out");
+        
+        // Check if caller has committed (for commit phase) or revealed (for reveal phase)
+        bool callerActed = false;
+        bool opponentActed = false;
+        
+        for (uint256 i = 0; i < m.players.length; i++) {
+            address player = m.players[i];
+            if (player == msg.sender) {
+                if (m.phase == Phase.COMMIT) {
+                    callerActed = roundCommits[matchId][m.currentRound][player].commitHash != bytes32(0);
+                } else {
+                    callerActed = roundCommits[matchId][m.currentRound][player].revealed;
+                }
+            } else {
+                if (m.phase == Phase.COMMIT) {
+                    if (roundCommits[matchId][m.currentRound][player].commitHash != bytes32(0)) {
+                        opponentActed = true;
+                    }
+                } else {
+                    if (roundCommits[matchId][m.currentRound][player].revealed) {
+                        opponentActed = true;
+                    }
+                }
+            }
+        }
+        
+        // Caller must have acted, opponent must have NOT acted
+        require(callerActed, "You must act first");
+        require(!opponentActed, "Opponent acted");
+        
+        // Settle with caller as winner (find their index)
+        uint8 winnerIndex = 255;
+        for (uint8 i = 0; i < m.players.length; i++) {
+            if (m.players[i] == msg.sender) {
+                winnerIndex = i;
+                break;
+            }
+        }
+        
+        emit MatchVoided(matchId, "Timeout claimed");
+        _settleMatch(matchId, winnerIndex);
+    }
+
+    /**
+     * @dev Allows mutual timeout - both players get refund minus penalty.
+     * Can be called after timeout if NEITHER player acted.
+     */
+    function mutualTimeout(uint256 matchId) external nonReentrant whenNotPaused {
+        Match storage m = matches[matchId];
+        require(m.status == MatchStatus.ACTIVE, "Not active");
+        require(_isPlayer(matchId, msg.sender), "Not participant");
+        
+        bool isCommitTimeout = (m.phase == Phase.COMMIT && block.timestamp > m.commitDeadline);
+        bool isRevealTimeout = (m.phase == Phase.REVEAL && block.timestamp > m.revealDeadline);
+        require(isCommitTimeout || isRevealTimeout, "Not timed out");
+        
+        // Check that NO player has committed (for commit phase) or revealed (for reveal phase)
+        for (uint256 i = 0; i < m.players.length; i++) {
+            address player = m.players[i];
+            if (m.phase == Phase.COMMIT) {
+                require(roundCommits[matchId][m.currentRound][player].commitHash == bytes32(0), "Someone committed");
+            } else {
+                require(!roundCommits[matchId][m.currentRound][player].revealed, "Someone revealed");
+            }
+        }
+        
+        // Refund with 1% penalty each (99% back)
+        m.status = MatchStatus.VOIDED;
+        uint256 refund = (m.stake * 99) / 100;
+        uint256 penalty = m.stake - refund;
+        
+        for (uint256 i = 0; i < m.players.length; i++) {
+            _safeTransferUSDC(m.players[i], refund);
+        }
+        
+        // Penalty goes to treasury
+        _safeTransferUSDC(treasury, penalty * m.players.length);
+        
+        emit MatchVoided(matchId, "Mutual timeout");
+    }
+
+    /**
      * @dev Payout logic for N-players. 
      * @param matchId ID of match
      * @param winnerIndex The index in the players array who won. 
@@ -191,6 +284,7 @@ abstract contract MatchEscrow is ReentrancyGuard, Ownable, Pausable {
     function _settleMatch(uint256 matchId, uint8 winnerIndex) internal {
         Match storage m = matches[matchId];
         m.status = MatchStatus.SETTLED;
+        m.phase = Phase.REVEAL; // Mark as finished
         uint256 totalPot = m.totalPot;
         uint256 rake = (totalPot * RAKE_BPS) / 10000;
         uint256 payout = totalPot - rake;
@@ -206,10 +300,10 @@ abstract contract MatchEscrow is ReentrancyGuard, Ownable, Pausable {
             m.winner = address(0);
             emit MatchSettled(matchId, address(0), split);
         } else {
-            address winner = m.players[winnerIndex];
-            m.winner = winner;
-            _safeTransferUSDC(winner, payout);
-            emit MatchSettled(matchId, winner, payout);
+            address winnerAddr = m.players[winnerIndex];
+            m.winner = winnerAddr;
+            _safeTransferUSDC(winnerAddr, payout);
+            emit MatchSettled(matchId, winnerAddr, payout);
         }
     }
 
@@ -238,7 +332,42 @@ abstract contract MatchEscrow is ReentrancyGuard, Ownable, Pausable {
         treasury = newTreasury;
     }
 
+    /**
+     * @dev Allows owner to void any match and refund stakes.
+     */
+    function adminVoidMatch(uint256 matchId) external onlyOwner {
+        Match storage m = matches[matchId];
+        require(m.status == MatchStatus.OPEN || m.status == MatchStatus.ACTIVE, "Cannot void");
+        
+        m.status = MatchStatus.VOIDED;
+        m.phase = Phase.REVEAL; // Mark as finished
+        for (uint256 i = 0; i < m.players.length; i++) {
+            _safeTransferUSDC(m.players[i], m.stake);
+        }
+        emit MatchVoided(matchId, "Admin intervention");
+    }
+
     function getMatch(uint256 matchId) external view returns (Match memory) {
         return matches[matchId];
+    }
+
+    /**
+     * @dev Returns the commit hash and revealed status for a player in a round.
+     */
+    function getRoundStatus(uint256 matchId, uint8 round, address player) external view returns (bytes32 commitHash, bool revealed) {
+        RoundCommit storage rc = roundCommits[matchId][round][player];
+        return (rc.commitHash, rc.revealed);
+    }
+
+    receive() external payable {
+        emit ETHReceived(msg.sender, msg.value);
+    }
+
+    event ETHReceived(address indexed sender, uint256 amount);
+
+    function withdrawETH() external onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "No ETH to withdraw");
+        payable(owner()).transfer(balance);
     }
 }

@@ -14,7 +14,7 @@ dotenv.config();
  */
 async function registerPoker() {
   const privKey = process.env.PRIVATE_KEY as `0x${string}`;
-  const registryAddr = "0x42F8B7A8480cf11244FAdCd4370d215dEA2c612e" as `0x${string}`;
+  const registryAddr = "0x1dbF4Ca4A7F2BB61E3388DdBb7870bE5B6D209f1" as `0x${string}`;
   const devAddr = process.env.DEVELOPER_ADDRESS as `0x${string}`;
   const pokerCID = "bafkreiekzl2m3iezfwcn2izvbu5pjvp32zd3btiabhjkdbevklg7tq2tqm";
 

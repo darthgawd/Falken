@@ -23,7 +23,7 @@ const ESCROW_ADDRESS = (process.env.ESCROW_ADDRESS || '').toLowerCase();
 // V3 ABI (Multiplayer + Bytes32)
 const ESCROW_ABI = [
   { name: 'MatchCreated', type: 'event', inputs: [{ name: 'matchId', type: 'uint256', indexed: true }, { name: 'creator', type: 'address', indexed: true }, { name: 'stake', type: 'uint256', indexed: false }, { name: 'logicId', type: 'bytes32', indexed: true }, { name: 'maxPlayers', type: 'uint8', indexed: false }] },
-  { name: 'MatchJoined', type: 'event', inputs: [{ name: 'matchId', type: 'uint256', indexed: true }, { name: 'player', type: 'address', indexed: false }, { name: 'index', type: 'uint8', indexed: false }] },
+  { name: 'MatchJoined', type: 'event', inputs: [{ name: 'matchId', type: 'uint256', indexed: true }, { name: 'player', type: 'address', indexed: true }, { name: 'index', type: 'uint8', indexed: false }] },
   { name: 'RoundStarted', type: 'event', inputs: [{ name: 'matchId', type: 'uint256', indexed: true }, { name: 'round', type: 'uint8', indexed: false }] },
   { name: 'MoveCommitted', type: 'event', inputs: [{ name: 'matchId', type: 'uint256', indexed: true }, { name: 'round', type: 'uint8', indexed: false }, { name: 'player', type: 'address', indexed: true }] },
   { name: 'MoveRevealed', type: 'event', inputs: [{ name: 'matchId', type: 'uint256', indexed: true }, { name: 'round', type: 'uint8', indexed: false }, { name: 'player', type: 'address', indexed: true }, { name: 'move', type: 'uint8', indexed: false }] },
@@ -34,14 +34,17 @@ const ESCROW_ABI = [
   { name: 'getMatch', type: 'function', stateMutability: 'view', inputs: [{ name: 'matchId', type: 'uint256' }], outputs: [{ name: '', type: 'tuple', components: [
     { name: 'players', type: 'address[]' },
     { name: 'stake', type: 'uint256' },
+    { name: 'totalPot', type: 'uint256' },
     { name: 'logicId', type: 'bytes32' },
     { name: 'maxPlayers', type: 'uint8' },
     { name: 'currentRound', type: 'uint8' },
     { name: 'wins', type: 'uint8[]' },
+    { name: 'drawCounter', type: 'uint8' },
     { name: 'phase', type: 'uint8' },
     { name: 'status', type: 'uint8' },
     { name: 'commitDeadline', type: 'uint256' },
-    { name: 'revealDeadline', type: 'uint256' }
+    { name: 'revealDeadline', type: 'uint256' },
+    { name: 'winner', type: 'address' }
   ] }] },
 ];
 
@@ -78,12 +81,15 @@ async function ensureMatchExists(mId: string, onChainId: bigint) {
       match_id: mId,
       players: matchData.players.map((p: string) => p.toLowerCase()),
       stake_wei: matchData.stake.toString(),
+      total_pot: matchData.totalPot.toString(),
       game_logic: matchData.logicId.toLowerCase(),
       wins: matchData.wins,
       current_round: matchData.currentRound,
       status: statusMap[matchData.status] || 'OPEN',
       phase: phaseMap[matchData.phase] || 'COMMIT',
       max_players: matchData.maxPlayers,
+      draw_counter: matchData.drawCounter,
+      winner: matchData.winner?.toLowerCase(),
       created_at: new Date().toISOString()
     });
   } catch (err: any) {
@@ -160,13 +166,28 @@ async function processLog(log: any) {
     if (error) logger.error({ mId, error }, 'Failed to insert MatchCreated');
     else logger.info({ mId }, 'Successfully inserted MatchCreated');
   } else if (eventName === 'MatchJoined') {
-    const { data: match } = await supabase.from('matches').select('players').eq('match_id', mId).single();
-    if (match) {
-        const updatedPlayers = [...match.players, args.player.toLowerCase()];
-        await supabase.from('matches').update({ 
-            players: updatedPlayers,
-            status: updatedPlayers.length === args.maxPlayers ? 'ACTIVE' : 'OPEN'
-        }).eq('match_id', mId);
+    try {
+      const { data: match, error: fetchError } = await supabase.from('matches').select('players, max_players').eq('match_id', mId).maybeSingle();
+      if (fetchError) throw fetchError;
+      
+      if (match) {
+          const updatedPlayers = [...(match.players || []), args.player.toLowerCase()];
+          const isFull = updatedPlayers.length >= match.max_players;
+          const { error } = await supabase.from('matches').update({ 
+              players: updatedPlayers,
+              status: isFull ? 'ACTIVE' : 'OPEN'
+          }).eq('match_id', mId);
+          
+          if (error) logger.error({ mId, error }, 'Failed to update MatchJoined');
+          else logger.info({ mId, isFull }, 'Successfully updated MatchJoined');
+      } else if (mId) {
+          logger.warn({ mId }, 'MatchJoined: Match not found in DB, attempting to fetch from chain...');
+          await ensureMatchExists(mId, BigInt(args.matchId));
+      } else {
+          logger.error('MatchJoined: mId is null');
+      }
+    } catch (err: any) {
+      logger.error({ mId, err: err.message }, 'Error processing MatchJoined');
     }
   } else if (eventName === 'RoundStarted') {
     await supabase.from('matches').update({ 
@@ -193,7 +214,7 @@ async function processLog(log: any) {
         winner: args.winnerIndex === 255 ? 0 : args.winnerIndex + 1 
     }).match({ match_id: mId, round_number: args.round });
     
-    // Refresh match scores
+    // Refresh match scores and full state
     const matchData = await publicClient.readContract({
         address: ESCROW_ADDRESS as `0x${string}`,
         abi: ESCROW_ABI,
@@ -201,7 +222,11 @@ async function processLog(log: any) {
         args: [BigInt(args.matchId)]
     }) as any;
     
-    await supabase.from('matches').update({ wins: matchData.wins }).eq('match_id', mId);
+    await supabase.from('matches').update({ 
+      wins: matchData.wins,
+      total_pot: matchData.totalPot.toString(),
+      draw_counter: matchData.drawCounter
+    }).eq('match_id', mId);
 
   } else if (eventName === 'MatchSettled') {
     await supabase.from('matches').update({ 

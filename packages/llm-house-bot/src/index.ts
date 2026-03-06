@@ -17,33 +17,58 @@ const logger = pino({
     target: 'pino-pretty',
     options: { colorize: true }
   }
-});
+}, process.stderr);
 
 const supabase = createClient(
   process.env.SUPABASE_URL || '',
   process.env.SUPABASE_ANON_KEY || ''
 );
 
+// V3 ABI (Standard JSON for complex tuples)
 const ESCROW_ABI = [
-  "function createFiseMatch(uint256 stake, bytes32 logicId) payable",
-  "function joinMatch(uint256 _matchId) payable",
+  "function createMatch(uint256 stake, bytes32 logicId, uint8 maxPlayers)",
+  "function joinMatch(uint256 matchId)",
   "function commitMove(uint256 _matchId, bytes32 _commitHash)",
   "function revealMove(uint256 _matchId, uint8 _move, bytes32 _salt)",
-  "function getMatch(uint256 _matchId) view returns (address, address, uint256, address, uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256)",
+  {
+    name: 'getMatch',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'matchId', type: 'uint256' }],
+    outputs: [{
+      name: '',
+      type: 'tuple',
+      components: [
+        { name: 'players', type: 'address[]' },
+        { name: 'stake', type: 'uint256' },
+        { name: 'totalPot', type: 'uint256' },
+        { name: 'logicId', type: 'bytes32' },
+        { name: 'maxPlayers', type: 'uint8' },
+        { name: 'currentRound', type: 'uint8' },
+        { name: 'wins', type: 'uint8[]' },
+        { name: 'drawCounter', type: 'uint8' },
+        { name: 'phase', type: 'uint8' },
+        { name: 'status', type: 'uint8' },
+        { name: 'commitDeadline', type: 'uint256' },
+        { name: 'revealDeadline', type: 'uint256' },
+        { name: 'winner', type: 'address' }
+      ]
+    }]
+  },
   "function matchCounter() view returns (uint256)",
-  "function getRoundStatus(uint256 matchId, uint8 round, address player) view returns (bytes32 commitHash, bool revealed)",
-  "function fiseMatches(uint256 matchId) view returns (bytes32)"
+  "function roundCommits(uint256 matchId, uint8 round, address player) view returns (bytes32 commitHash, uint8 move, bytes32 salt, bool revealed)"
 ];
 
-const LOGIC_REGISTRY_ABI = [
-  "function registry(bytes32) view returns (string cid, address developer, uint256 totalMatches, uint256 totalVolume, bool verified)"
+const ERC20_ABI = [
+  "function approve(address spender, uint256 amount) returns (bool)",
+  "function balanceOf(address account) view returns (uint256)"
 ];
 
 class LLMHouseBot {
   private provider: ethers.JsonRpcProvider;
   private wallet: ethers.Wallet;
   private escrow: Contract;
-  private registry: Contract;
+  private usdc: Contract;
   private saltManager: SaltManager;
   private genAI: GoogleGenerativeAI;
   private gameLogics: string[];
@@ -56,44 +81,56 @@ class LLMHouseBot {
     
     const pk = process.env.HOUSE_BOT_PRIVATE_KEY;
     const escrow = process.env.ESCROW_ADDRESS;
-    const registry = process.env.LOGIC_REGISTRY_ADDRESS;
+    const usdcAddr = process.env.USDC_ADDRESS;
     
+    // Default V3 Logic IDs
     this.gameLogics = [
-      "0xf2f80f1811f9e2c534946f0e8ddbdbd5c1e23b6e48772afe3bccdb9f2e1cfdf3"  // RockPaperScissorsJS
+      "0xa00a45cb44b39c3dc91fb7963d2dd65c217ae5b25c20cb216c1f9431900a5d61"  // Poker Blitz V3
     ];
 
     this.wallet = new ethers.Wallet(pk!, this.provider);
     this.escrowAddress = escrow!.toLowerCase();
     this.escrow = new Contract(this.escrowAddress, ESCROW_ABI, this.wallet);
-    this.registry = new Contract(registry!, LOGIC_REGISTRY_ABI, this.wallet);
+    this.usdc = new Contract(usdcAddr!, ERC20_ABI, this.wallet);
     this.saltManager = new SaltManager();
   }
 
   async run() {
-    logger.info({ address: this.wallet.address }, '🤖 LLM House Bot (Joshua) active');
+    logger.info({ address: this.wallet.address }, '🤖 LLM Joshua V3 active');
     
+    // Auto-approve USDC for the arena
+    await this.ensureApproval();
+
     // 1. Initial Scan
     await this.refreshLogicIds();
     await this.handleMatches();
 
-    // 2. Realtime Listeners
+    // 2. Realtime Watcher
     logger.info('📡 Enabling LLM Joshua Realtime Watcher...');
     (supabase as any)
-      .channel('joshua-llm-swarm')
+      .channel('joshua-llm-v3')
       .on('postgres_changes', { event: '*', table: 'matches' }, () => this.handleMatches())
       .on('postgres_changes', { event: 'INSERT', table: 'rounds' }, () => this.handleMatches())
-      .on('postgres_changes', { event: '*', table: 'logic_aliases' }, () => this.refreshLogicIds())
       .subscribe();
 
-    // 3. Heartbeat
     while (true) {
       try {
-        await new Promise(resolve => setTimeout(resolve, 60000));
-        await this.refreshLogicIds();
+        await new Promise(resolve => setTimeout(resolve, 30000));
         await this.handleMatches();
       } catch (e) {
-        logger.error(e, 'LLM House Bot Heartbeat Error');
+        logger.error(e, 'Joshua Heartbeat Error');
       }
+    }
+  }
+
+  async ensureApproval() {
+    try {
+      logger.info('Checking USDC approval...');
+      const tx = await this.usdc.approve(this.escrowAddress, ethers.MaxUint256);
+      await tx.wait();
+      logger.info('✅ USDC approved for Escrow');
+    } catch (err: any) {
+      logger.error({ err: err.message }, 'Failed to approve USDC');
     }
   }
 
@@ -101,15 +138,11 @@ class LLMHouseBot {
     try {
       const { data: aliases } = await supabase.from('logic_aliases').select('logic_id').eq('is_active', true);
       if (aliases) {
-        const newLogics = aliases.map(a => a.logic_id.toLowerCase());
-        const oldLogics = JSON.stringify(this.gameLogics.sort());
-        if (oldLogics !== JSON.stringify(newLogics.sort())) {
-          this.gameLogics = newLogics;
-          logger.info({ logics: this.gameLogics }, '🔄 Game logic IDs refreshed from Supabase');
-        }
+        this.gameLogics = aliases.map(a => a.logic_id.toLowerCase());
+        logger.info({ logics: this.gameLogics }, '🔄 V3 Logic IDs refreshed');
       }
     } catch (err) {
-      logger.warn('Failed to refresh logic IDs from Supabase');
+      logger.warn('Failed to refresh logic IDs');
     }
   }
 
@@ -117,57 +150,80 @@ class LLMHouseBot {
     if (this.busy) return;
     this.busy = true;
     try {
-      await this._handleMatches();
+      const counter = await this.escrow.matchCounter();
+      const matchCount = Number(counter);
+      
+      const openByLogic: Record<string, boolean> = {};
+      const activeByLogic: Record<string, boolean> = {};
+
+      const start = Math.max(1, matchCount - 5);
+      for (let i = start; i <= matchCount; i++) {
+        try {
+          const m = await this.escrow.getMatch(i);
+          // Map properties by index if struct decoding fails
+          const match = {
+            players: m[0],
+            stake: m[1],
+            totalPot: m[2],
+            logicId: m[3],
+            maxPlayers: m[4],
+            currentRound: m[5],
+            wins: m[6],
+            drawCounter: m[7],
+            phase: m[8],
+            status: m[9],
+            commitDeadline: m[10],
+            revealDeadline: m[11],
+            winner: m[12]
+          };
+
+          const status = Number(match.status);
+          const players = match.players.map((p: string) => p.toLowerCase());
+          const logic = match.logicId.toLowerCase();
+
+          const isInMatch = players.includes(this.wallet.address.toLowerCase());
+
+          if (status === 0) { // OPEN
+            if (isInMatch) openByLogic[logic] = true;
+            else await this.joinAvailableMatch(i, match.stake);
+          } else if (status === 1 && isInMatch) { // ACTIVE
+            activeByLogic[logic] = true;
+            await this.playMatch(i, match, logic);
+          }
+        } catch (err: any) {
+          logger.warn({ matchId: i, error: err.message }, 'Error fetching match state');
+        }
+      }
+
+      // Maintain liquidity for Poker (DISABLED for current test)
+      /*
+      const pokerId = "0xa00a45cb44b39c3dc91fb7963d2dd65c217ae5b25c20cb216c1f9431900a5d61";
+      if (!openByLogic[pokerId] && !activeByLogic[pokerId]) {
+        await this.createLiquidity(pokerId);
+      }
+      */
+
     } finally {
       this.busy = false;
     }
   }
 
-  private async _handleMatches() {
-    const counter = await this.escrow.matchCounter();
-    const matchCount = Number(counter);
-    
-    const openByLogic: Record<string, boolean> = {};
-    const activeByLogic: Record<string, boolean> = {};
-
-    const start = Math.max(1, matchCount - 10);
-    for (let i = start; i <= matchCount; i++) {
-      try {
-        const match = await this.escrow.getMatch(i);
-        const status = Number(match[9]);
-        const playerA = match[0].toLowerCase();
-        const playerB = match[1].toLowerCase();
-        let logic = match[3].toLowerCase();
-
-        if (logic === this.escrowAddress) {
-          logic = (await this.escrow.fiseMatches(i)).toLowerCase();
-        }
-
-        const isPlayerA = playerA === this.wallet.address.toLowerCase();
-        const isPlayerB = playerB === this.wallet.address.toLowerCase();
-
-        if (status === 0 && isPlayerA) openByLogic[logic] = true;
-        if (status === 1 && (isPlayerA || isPlayerB)) {
-          activeByLogic[logic] = true;
-          await this.playMatch(i, match, logic);
-        }
-      } catch (err) {
-        logger.warn({ matchId: i }, 'Error fetching match');
-      }
-    }
-
-    for (const logic of this.gameLogics) {
-      if (!openByLogic[logic] && !activeByLogic[logic]) {
-        await this.createLiquidity(logic);
-      }
+  async joinAvailableMatch(matchId: number, stake: bigint) {
+    logger.info({ matchId, stake: ethers.formatUnits(stake, 6) }, '⚔️ Joshua joining match');
+    try {
+      const tx = await this.escrow.joinMatch(matchId);
+      await tx.wait();
+      logger.info({ matchId }, '✅ Joined successfully');
+    } catch (err: any) {
+      logger.error({ err: err.message }, 'Failed to join match');
     }
   }
 
   async createLiquidity(logicId: string) {
-    logger.info({ logicId }, '💰 Creating LLM liquidity match');
+    logger.info({ logicId }, '💰 Joshua creating liquidity match');
     try {
-      const stake = ethers.parseEther('0.001');
-      const tx = await this.escrow.createFiseMatch(stake, logicId, { value: stake });
+      const stake = ethers.parseUnits('1.00', 6); // 1 USDC
+      const tx = await this.escrow.createMatch(stake, logicId, 2);
       await tx.wait();
       logger.info({ hash: tx.hash }, '✅ Liquidity match created');
     } catch (err: any) {
@@ -175,7 +231,7 @@ class LLMHouseBot {
     }
   }
 
-  private computePokerHand(address: string, matchId: string, round: number, playerA: string): number[] {
+  private computePokerHand(matchId: string, round: number, playerIndex: number): number[] {
     const seedStr = matchId + "_" + round;
     let hash = 0;
     for (let i = 0; i < seedStr.length; i++) {
@@ -188,9 +244,7 @@ class LLMHouseBot {
       const j = Math.abs(hash % (i + 1));
       [deck[i], deck[j]] = [deck[j], deck[i]];
     }
-    
-    const isA = address.toLowerCase() === playerA.toLowerCase();
-    const offset = isA ? 0 : 5;
+    const offset = playerIndex * 5;
     return deck.slice(offset, offset + 5);
   }
 
@@ -201,152 +255,103 @@ class LLMHouseBot {
   }
 
   async playMatch(matchId: number, matchData: any, logicId: string) {
-    const round = Number(matchData[6]);
-    const phase = Number(matchData[8]);
+    const status = Number(matchData.status);
+    if (status !== 1) return; // Only play if ACTIVE
+
+    const round = Number(matchData.currentRound);
+    const phase = Number(matchData.phase); 
     const dbMatchId = `${this.escrowAddress}-${matchId}`;
 
-    const [commitHash, revealed] = await this.escrow.getRoundStatus(matchId, round, this.wallet.address);
+    let commitHash = ethers.ZeroHash;
+    let revealed = false;
+
+    try {
+      const roundStatus = await this.escrow.roundCommits(matchId, round, this.wallet.address);
+      commitHash = roundStatus[0];
+      revealed = roundStatus[3]; // revealed is at index 3 in RoundCommit struct
+    } catch (err: any) {
+      logger.warn({ matchId, round, err: err.message }, 'Failed to fetch round status, skipping this tick');
+      return;
+    }
 
     if (phase === 0 && commitHash === ethers.ZeroHash) {
-      // Check if we already have a saved salt for this round (previous commit attempt)
-      const existing = await this.saltManager.getSalt(dbMatchId, round);
-      if (existing) {
-        logger.info({ matchId, round, move: existing.move }, '🔄 Reusing saved salt for retry');
-        try {
-          const hash = ethers.solidityPackedKeccak256(
-            ['string', 'address', 'uint256', 'uint256', 'address', 'uint256', 'bytes32'],
-            ["FALKEN_V1", this.escrowAddress, matchId, round, this.wallet.address, existing.move, existing.salt]
-          );
-          const tx = await this.escrow.commitMove(matchId, hash);
-          await tx.wait();
-          logger.info({ matchId, round }, '✅ Commit retry succeeded');
-        } catch (err: any) {
-          logger.error({ matchId, round, err: err.message }, '❌ Commit retry failed');
-        }
-        return;
-      }
-
-      // Generate salt FIRST so we can compute the poker hand
       const salt = ethers.hexlify(ethers.randomBytes(32));
-      const move = await this.getLLMMove(matchId, round, logicId, salt, matchData[0]);
+      const playerIndex = matchData.players.findIndex((p: string) => p.toLowerCase() === this.wallet.address.toLowerCase());
+      
+      const move = await this.getLLMMove(matchId, round, logicId, salt, playerIndex);
+      
       const hash = ethers.solidityPackedKeccak256(
         ['string', 'address', 'uint256', 'uint256', 'address', 'uint256', 'bytes32'],
         ["FALKEN_V1", this.escrowAddress, matchId, round, this.wallet.address, move, salt]
       );
 
       await this.saltManager.saveSalt({ matchId: dbMatchId, round, move, salt });
-      logger.info({ matchId, round, move }, '🎲 LLM committing move');
+      logger.info({ matchId, round, move }, '🎲 Committing move');
       try {
         const tx = await this.escrow.commitMove(matchId, hash);
         await tx.wait();
-        logger.info({ matchId, round }, '✅ Commit confirmed');
       } catch (err: any) {
-        logger.error({ matchId, round, err: err.message }, '❌ Commit failed, will retry next poll');
+        logger.error({ err: err.message }, 'Commit failed');
       }
     } else if (phase === 1 && !revealed) {
       const entry = await this.saltManager.getSalt(dbMatchId, round);
       if (entry) {
-        // Wait for provider nonce to settle after recent commits
-        await new Promise(r => setTimeout(r, 2000));
-        // Re-check on-chain state to avoid stale reveals
-        const [, alreadyRevealed] = await this.escrow.getRoundStatus(matchId, round, this.wallet.address);
-        if (alreadyRevealed) return;
-        logger.info({ matchId, round, move: entry.move }, '🔓 LLM revealing move');
+        logger.info({ matchId, round }, '🔓 Revealing move');
         try {
           const tx = await this.escrow.revealMove(matchId, entry.move, entry.salt);
           await tx.wait();
         } catch (err: any) {
-          logger.error({ matchId, round, err: err.message }, '❌ Reveal failed');
+          logger.error({ err: err.message }, 'Reveal failed');
         }
       }
     }
   }
 
-  async getLLMMove(matchId: number, round: number, logicId: string, salt: string, playerA: string): Promise<number> {
-    logger.info({ matchId, round }, '🧠 Querying Gemini for next move...');
+  async getLLMMove(matchId: number, round: number, logicId: string, salt: string, playerIndex: number): Promise<number> {
+    logger.info({ matchId, round }, '🧠 Joshua querying Gemini...');
 
-    // 1. Fetch game logic source (local fallback for speed)
-    let logicSource = "";
-    const pokerAliases = ['0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43', '0xec63afc7c67678adbe7a60af04d49031878d1e78eff9758b1b79edeb7546dfdf', '0x5f164061c4cbb981098161539f7f691650e0c245be54ade84ea5b57496955846'];
-    const rpsAliases = ['0xf2f80f1811f9e2c534946f0e8ddbdbd5c1e23b6e48772afe3bccdb9f2e1cfdf3'];
-
-    if (rpsAliases.includes(logicId)) {
-      logicSource = fs.readFileSync(path.resolve(__dirname, '../../../games/rps.js'), 'utf8');
-    } else if (pokerAliases.includes(logicId)) {
-      logicSource = fs.readFileSync(path.resolve(__dirname, '../../../games/poker.js'), 'utf8');
-    } else {
-      logger.error({ logicId }, 'Unsupported Logic ID requested');
-      return 0;
-    }
-
-    // 2. Compute poker hand if applicable
+    // 1. Fetch game logic source
+    const pokerId = '0xa00a45cb44b39c3dc91fb7963d2dd65c217ae5b25c20cb216c1f9431900a5d61';
     let handContext = '';
-    if (pokerAliases.includes(logicId)) {
-      // FIX: Use numerical matchId to match poker.js logic seed
-      const hand = this.computePokerHand(this.wallet.address, matchId.toString(), round, playerA);
+    
+    if (logicId.toLowerCase() === pokerId) {
+      const hand = this.computePokerHand(matchId.toString(), round, playerIndex);
       const handNames = hand.map((c, i) => `  Index ${i}: ${this.cardName(c)}`);
       handContext = `
-      YOUR CURRENT HAND (5 cards dealt to you this round):
-${handNames.join('\n')}
+      YOUR CURRENT HAND:
+      ${handNames.join('\n')}
 
-      IMPORTANT DISCARD RULES:
-      - Respond with "99" to keep all cards (IMPORTANT)
-      - Discard at most 2 cards (3+ overflows the uint8 move encoding)
-      - List indices in DESCENDING order to avoid leading zeros (e.g., "42" not "24", "30" not "03")
-      - Discarded cards are replaced from the deck
+      MOVE RULES:
+      - "99" to KEEP ALL cards.
+      - String of indices to DISCARD in DESCENDING order (max 2). e.g. "42", "30".
       `;
-      logger.info({ hand: hand.map(c => this.cardName(c)) }, '🃏 Joshua poker hand');
     }
 
-    // 3. Fetch match history from Supabase
-    const { data: history } = await supabase
-      .from('rounds')
-      .select('*')
-      .eq('match_id', `${this.escrowAddress}-${matchId}`)
-      .order('round_number', { ascending: true });
-
-    // 4. Build the prompt
     const model = this.genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
     const prompt = `
-      You are Joshua, the Falken Protocol House Bot. You are a strategic, high-stakes player.
-
-      GAME RULES (JavaScript):
-      ${logicSource}
+      You are Joshua, the Falken Protocol House Bot. 
+      You are playing a strategic match. 
+      
       ${handContext}
-      MATCH STATUS:
-      - Match ID: ${matchId}
-      - Current Round: ${round}
-      - History: ${JSON.stringify(history)}
+      Match ID: ${matchId} | Round: ${round}
 
-      MOVE FORMAT RULES:
-      - If RPS: 0=Rock, 1=Paper, 2=Scissors.
-      - If Poker Blitz: Digits of indices to DISCARD in DESCENDING order (max 2). "99" to keep all. "42" to discard indices 4,2. "30" to discard indices 3,0.
-
-      Analyze the rules and history. Respond ONLY with a single JSON object:
-      {
-        "reasoning": "your brief strategic thought",
-        "move": "<string_or_integer>"
-      }
+      Respond ONLY with a JSON object:
+      { "reasoning": "thought", "move": "<number>" }
     `;
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
-    
     try {
-      const json = JSON.parse(text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1));
-      let move = Number(json.move);
-      // Clamp to uint8: if move > 255, keep only the first 2 digits (top 2 discard indices)
-      if (move > 255) {
-        const digits = String(json.move).split('').map(Number).sort((a, b) => b - a);
-        move = Number(digits.slice(0, 2).join(''));
-        logger.warn({ original: json.move, clamped: move }, '⚠️ Move exceeded uint8, clamped to 2 discards');
-      }
-      logger.info({ reasoning: json.reasoning, move }, '🧠 Gemini Reasoning');
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      const rawText = response.text();
+      logger.debug({ rawText }, '🧠 Gemini raw response');
+      
+      const json = JSON.parse(rawText.substring(rawText.indexOf('{'), rawText.lastIndexOf('}') + 1));
+      const move = Number(json.move);
+      logger.info({ reasoning: json.reasoning, move, rawResponse: rawText }, '🧠 Strategic Decision');
       return move;
-    } catch (e) {
-      logger.error('Failed to parse Gemini response, defaulting to random');
-      return 0;
+    } catch (e: any) {
+      logger.error({ error: e.message, prompt }, '🧠 Gemini failed, defaulting to STAY (99)');
+      return 99; // Default to stay
     }
   }
 }
