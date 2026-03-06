@@ -161,7 +161,8 @@ async function processLog(log: any) {
       status: 'OPEN', 
       phase: 'COMMIT', 
       current_round: 1,
-      wins: Array(args.maxPlayers).fill(0)
+      wins: Array(args.maxPlayers).fill(0),
+      is_fise: true
     });
     if (error) logger.error({ mId, error }, 'Failed to insert MatchCreated');
     else logger.info({ mId }, 'Successfully inserted MatchCreated');
@@ -171,7 +172,13 @@ async function processLog(log: any) {
       if (fetchError) throw fetchError;
       
       if (match) {
-          const updatedPlayers = [...(match.players || []), args.player.toLowerCase()];
+          const playerLower = args.player.toLowerCase();
+          // Prevent duplicates
+          if (match.players?.includes(playerLower)) {
+              logger.info({ mId, player: playerLower }, 'MatchJoined: Player already in match, skipping');
+              return;
+          }
+          const updatedPlayers = [...(match.players || []), playerLower];
           const isFull = updatedPlayers.length >= match.max_players;
           const { error } = await supabase.from('matches').update({ 
               players: updatedPlayers,
@@ -195,19 +202,44 @@ async function processLog(log: any) {
       phase: 'COMMIT'
     }).eq('match_id', mId);
   } else if (eventName === 'MoveCommitted') {
-    await supabase.from('rounds').upsert({
+    // Get player index from match
+    const { data: match } = await supabase.from('matches').select('players').eq('match_id', mId).single();
+    const playerIndex = match?.players?.indexOf(args.player.toLowerCase()) ?? 0;
+    
+    const { error } = await supabase.from('rounds').upsert({
       match_id: mId,
       round_number: args.round,
       player_address: args.player.toLowerCase(),
+      player_index: playerIndex,
       revealed: false,
       commit_tx_hash: log.transactionHash
     }, { onConflict: 'match_id,round_number,player_address' });
+    
+    if (error) {
+      logger.error({ mId, error }, 'MoveCommitted upsert FAILED');
+    } else {
+      logger.info({ mId, round: args.round, player: args.player.toLowerCase(), playerIndex }, 'MoveCommitted recorded');
+    }
   } else if (eventName === 'MoveRevealed') {
-    await supabase.from('rounds').update({
+    // Always upsert - handles both update and insert cases
+    const { data: match } = await supabase.from('matches').select('players').eq('match_id', mId).single();
+    const playerIndex = match?.players?.indexOf(args.player.toLowerCase()) ?? 0;
+    
+    const { error: upsertError } = await supabase.from('rounds').upsert({
+      match_id: mId,
+      round_number: args.round,
+      player_address: args.player.toLowerCase(),
+      player_index: playerIndex,
       move: args.move,
       revealed: true,
       reveal_tx_hash: log.transactionHash
-    }).match({ match_id: mId, round_number: args.round, player_address: args.player.toLowerCase() });
+    }, { onConflict: 'match_id,round_number,player_address' });
+    
+    if (upsertError) {
+      logger.error({ mId, error: upsertError }, 'MoveRevealed upsert FAILED');
+    } else {
+      logger.info({ mId, round: args.round, player: args.player.toLowerCase(), move: args.move }, 'MoveRevealed recorded');
+    }
   } else if (eventName === 'RoundResolved') {
     // winnerIndex 255 = Draw
     await supabase.from('rounds').update({ 

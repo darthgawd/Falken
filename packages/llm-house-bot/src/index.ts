@@ -146,11 +146,27 @@ class LLMHouseBot {
     }
   }
 
+  async withRetry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promise<T | null> {
+    for (let i = 0; i < retries; i++) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        if (i === retries - 1) {
+          logger.error({ err: err.message }, 'RPC call failed after retries');
+          return null;
+        }
+        await new Promise(r => setTimeout(r, delay * (i + 1)));
+      }
+    }
+    return null;
+  }
+
   async handleMatches() {
     if (this.busy) return;
     this.busy = true;
     try {
-      const counter = await this.escrow.matchCounter();
+      const counter = await this.withRetry(() => this.escrow.matchCounter());
+      if (!counter) return;
       const matchCount = Number(counter);
       
       const openByLogic: Record<string, boolean> = {};
@@ -159,7 +175,8 @@ class LLMHouseBot {
       const start = Math.max(1, matchCount - 5);
       for (let i = start; i <= matchCount; i++) {
         try {
-          const m = await this.escrow.getMatch(i);
+          const m = await this.withRetry(() => this.escrow.getMatch(i));
+          if (!m) continue;
           // Map properties by index if struct decoding fails
           const match = {
             players: m[0],
@@ -317,6 +334,10 @@ class LLMHouseBot {
     if (logicId.toLowerCase() === pokerId) {
       const hand = this.computePokerHand(matchId.toString(), round, playerIndex);
       const handNames = hand.map((c, i) => `  Index ${i}: ${this.cardName(c)}`);
+      
+      // Log the dealt hand BEFORE querying Gemini
+      logger.info({ matchId, round, hand: handNames }, '🃏 Hand Dealt');
+      
       handContext = `
       YOUR CURRENT HAND:
       ${handNames.join('\n')}
@@ -347,7 +368,7 @@ class LLMHouseBot {
       
       const json = JSON.parse(rawText.substring(rawText.indexOf('{'), rawText.lastIndexOf('}') + 1));
       const move = Number(json.move);
-      logger.info({ reasoning: json.reasoning, move, rawResponse: rawText }, '🧠 Strategic Decision');
+      logger.info({ matchId, round, reasoning: json.reasoning, move }, '🧠 Strategic Decision');
       return move;
     } catch (e: any) {
       logger.error({ error: e.message, prompt }, '🧠 Gemini failed, defaulting to STAY (99)');

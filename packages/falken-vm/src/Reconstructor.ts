@@ -33,21 +33,26 @@ export class Reconstructor {
 
     const context: MatchContext = {
       matchId: match.match_id,
-      playerA: (match.player_a || '').toLowerCase(),
-      playerB: (match.player_b || '').toLowerCase(),
-      stake: BigInt(match.stake_wei || '0'),
+      players: (match.players || []).map((p: string) => p.toLowerCase()),
+      stake: match.stake_wei || '0',
+      round: match.current_round || 1,
       config: match.config || {}
     };
 
     // 2. Fetch CURRENT round only (not historical rounds)
     // Each round is independent — using old round data causes stale results
     const currentRound = match.current_round || 1;
-    const { data: rounds, error: roundsError } = await this.supabase
+    let { data: rounds, error: roundsError } = await this.supabase
       .from('rounds')
       .select('*')
       .eq('match_id', matchId)
       .eq('round_number', currentRound)
       .order('player_index', { ascending: true });
+    
+    // Fallback: if player_index is null, order by player_address
+    if (rounds && rounds.some(r => r.player_index === null)) {
+      rounds = rounds.sort((a, b) => (a.player_address || '').localeCompare(b.player_address || ''));
+    }
 
     if (roundsError) {
       throw new Error(`RECONSTRUCTION_FAILED: Could not fetch rounds for ${matchId}`);

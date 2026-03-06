@@ -5,12 +5,11 @@ const logger = (pino as any)({ name: 'falken-referee' });
 
 /**
  * Round winner result type:
- * - 0: Draw
- * - 1: Player A wins
- * - 2: Player B wins
+ * - 0 to N-1: Index of winning player in the players array
+ * - 255: Draw
  * - null: Pending
  */
-export type RoundWinner = 0 | 1 | 2 | null;
+export type RoundWinner = number | null;
 
 export type RoundResolution = {
   winner: RoundWinner;
@@ -18,8 +17,9 @@ export type RoundResolution = {
 };
 
 /**
- * Falken VM: The Referee
+ * Falken VM: The Referee (V3)
  * Securely executes JS game logic to settle on-chain matches.
+ * Hardened for N-player scalability.
  */
 export class Referee {
   /**
@@ -28,8 +28,7 @@ export class Referee {
   async resolveRound(jsCode: string, context: MatchContext, moves: GameMove[]): Promise<RoundResolution | null> {
     const currentRound = moves[0]?.round || 1;
     logger.info({ 
-      playerA: context.playerA.slice(0, 10) + '...',
-      playerB: context.playerB.slice(0, 10) + '...',
+      playersCount: context.players?.length || 2,
       round: currentRound,
       movesCount: moves.length 
     }, 'INITIATING_ROUND_RESOLUTION');
@@ -70,7 +69,7 @@ export class Referee {
 
       const result = runLogic(context, moves);
       
-      if (!result || result.winner === 0) return null;
+      if (!result) return null;
 
       logger.info({ winner: result.winner, description: result.description, round: currentRound }, 'ROUND_EXECUTION_RESULT');
       const normalizedWinner = this.normalizeResult(result.winner, context);
@@ -82,48 +81,49 @@ export class Referee {
     }
   }
 
-  async resolveMatch(jsCode: string, context: MatchContext, moves: GameMove[]): Promise<string | null> {
-    const currentRound = moves[0]?.round || 1;
-    logger.info({ 
-      playerA: context.playerA.slice(0, 10) + '...',
-      playerB: context.playerB.slice(0, 10) + '...',
-      round: currentRound 
-    }, 'INITIATING_MATCH_RESOLUTION');
-
-    try {
-      const resolution = await this.resolveRound(jsCode, context, moves);
-      if (resolution?.winner === 1) return context.playerA;
-      if (resolution?.winner === 2) return context.playerB;
-      return null;
-    } catch (err: any) {
-      logger.error({ err: err.message, round: currentRound }, 'MATCH_RESOLUTION_FAULT');
-      throw err;
-    }
-  }
-
   private transformJsCode(jsCode: string): string {
-    return jsCode
+    // Extract default class name
+    const defaultClassMatch = jsCode.match(/export\s+default\s+class\s+(\w+)/);
+    const className = defaultClassMatch ? defaultClassMatch[1] : null;
+    
+    let transformed = jsCode
       .replace(/export\s*\{\s*(\w+)\s+as\s+default\s*\};?/g, 'module.exports = $1;')
       .replace(/export\s+default\s+class\s+(\w+)/g, 'class $1')
       .replace(/export\s+class\s+(\w+)/g, 'class $1')
       .replace(/export\s+\{[^}]*\};?/g, '')
       .replace(/export\s+/g, '');
+    
+    // Add module.exports assignment for default class
+    if (className) {
+      transformed += `\nmodule.exports = ${className};`;
+    }
+    
+    return transformed;
   }
 
   private normalizeResult(result: any, context: MatchContext): RoundWinner {
+    // 255 is the protocol standard for DRAW
+    if (result === 255 || result === 'draw' || result === 0 || result === '0') return 255;
+
     if (typeof result === 'number') {
-      if (result === 0 || result === 1 || result === 2) return result as RoundWinner;
-      if (result === 3) return 0;
+      // If it's 1 or 2, we must ensure we map it to 0-indexed indices (0 or 1)
+      // for backward compatibility with 2-player games that return 1/2.
+      // New N-player games should return the 0-indexed index directly.
+      if (result === 1 || result === 2) return result - 1;
+      return result;
     }
+
     if (typeof result === 'string') {
       const lower = result.toLowerCase().trim();
-      if (lower === 'draw' || lower === '0' || lower === 'tie') return 0;
-      if (lower === 'a' || lower === '1' || lower === 'playera') return 1;
-      if (lower === 'b' || lower === '2' || lower === 'playerb') return 2;
-      if (lower === context.playerA.toLowerCase()) return 1;
-      if (lower === context.playerB.toLowerCase()) return 2;
+      if (lower === 'a' || lower === 'playera') return 0;
+      if (lower === 'b' || lower === 'playerb') return 1;
+      
+      // Check if it's a player address
+      const idx = context.players?.findIndex(p => p.toLowerCase() === lower);
+      if (idx !== undefined && idx !== -1) return idx;
     }
+
     logger.warn({ result }, 'Unrecognized game result, defaulting to draw');
-    return 0;
+    return 255;
   }
 }
