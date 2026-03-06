@@ -7,8 +7,7 @@ import Link from 'next/link';
 
 interface Match {
   match_id: string;
-  player_a: string;
-  player_b: string;
+  players: string[];
   stake_wei: string; 
   status: string;
   phase: string;
@@ -64,8 +63,9 @@ export function MatchFeed({ initialTab = 'ALL', onTabChange }: { initialTab?: Ga
 
       const involvedAddresses = new Set<string>();
       matchData.forEach(m => {
-        involvedAddresses.add(m.player_a.toLowerCase());
-        if (m.player_b) involvedAddresses.add(m.player_b.toLowerCase());
+        if (m.players && Array.isArray(m.players)) {
+          m.players.forEach((p: string) => involvedAddresses.add(p.toLowerCase()));
+        }
       });
 
       const { data: profiles } = await supabase
@@ -76,11 +76,16 @@ export function MatchFeed({ initialTab = 'ALL', onTabChange }: { initialTab?: Ga
       const profileMap = new Map(profiles?.map(p => [p.address.toLowerCase(), p.nickname]) || []);
 
       const enrichedMatches = matchData
-        .map(m => ({
-          ...m,
-          player_a_nickname: profileMap.get(m.player_a.toLowerCase()),
-          player_b_nickname: m.player_b ? profileMap.get(m.player_b.toLowerCase()) : undefined
-        }))
+        .map(m => {
+          const p = m.players || [];
+          return {
+            ...m,
+            player_a_nickname: profileMap.get(p[0]?.toLowerCase()) || p[0]?.slice(0,6),
+            player_b_nickname: p[1] ? (profileMap.get(p[1].toLowerCase()) || p[1].slice(0,6)) : undefined,
+            player_a: p[0],
+            player_b: p[1]
+          };
+        })
         .sort((a, b) => {
           const idA = parseInt(a.match_id.split('-').pop() || '0');
           const idB = parseInt(b.match_id.split('-').pop() || '0');
@@ -157,14 +162,14 @@ export function MatchFeed({ initialTab = 'ALL', onTabChange }: { initialTab?: Ga
                 <div className="flex flex-col min-w-0">
                   <span className="text-[8px] md:text-[10px] font-black text-blue-600 dark:text-gold uppercase tracking-tighter mb-0.5">INITIATOR</span>
                   <span className="text-sm md:text-base font-medium text-zinc-900 dark:text-zinc-100 truncate">
-                    {match.player_a_nickname || match.player_a.slice(0, 6)}
+                    {match.player_a_nickname || match.players[0]?.slice(0, 6)}
                   </span>
                 </div>
                 <Swords className="w-3 h-3 md:w-4 md:h-4 text-zinc-200 dark:text-zinc-800 shrink-0" />
                 <div className="flex flex-col min-w-0">
                   <span className="text-[8px] md:text-[10px] font-black text-blue-600 dark:text-gold uppercase tracking-tighter mb-0.5">RIVAL</span>
-                  <span className={`text-sm md:text-base font-medium truncate ${match.player_b && match.player_b !== '0x0000000000000000000000000000000000000000' ? 'text-zinc-900 dark:text-zinc-100' : 'text-zinc-300 dark:text-zinc-800 italic'}`}>
-                    {match.player_b && match.player_b !== '0x0000000000000000000000000000000000000000' ? (match.player_b_nickname || match.player_b.slice(0, 6)) : 'WAITING...'}
+                  <span className={`text-sm md:text-base font-medium truncate ${match.players[1] && match.players[1] !== '0x0000000000000000000000000000000000000000' ? 'text-zinc-900 dark:text-zinc-100' : 'text-zinc-300 dark:text-zinc-800 italic'}`}>
+                    {match.players[1] && match.players[1] !== '0x0000000000000000000000000000000000000000' ? (match.player_b_nickname || match.players[1].slice(0, 6)) : 'WAITING...'}
                   </span>
                 </div>
               </div>
@@ -174,7 +179,7 @@ export function MatchFeed({ initialTab = 'ALL', onTabChange }: { initialTab?: Ga
               <div className="flex flex-col text-left sm:text-right tabular-nums">
                 <span className="text-[8px] md:text-[10px] font-black text-blue-600 dark:text-gold uppercase tracking-tighter mb-0.5">STAKE</span>
                 <span className="text-sm md:text-base font-black text-zinc-900 dark:text-zinc-100 italic">
-                  {(Number(match.stake_wei || 0) / 1e18).toFixed(4)} <span className="text-[10px] not-italic text-zinc-500 uppercase">ETH</span>
+                  {(Number(match.stake_wei || 0) / 1e6).toFixed(2)} <span className="text-[10px] not-italic text-zinc-500 uppercase">USDC</span>
                 </span>
               </div>
               

@@ -119,18 +119,9 @@ export default function MatchDetail({ params }: { params: Promise<{ id: string }
       if (seq !== fetchSeq.current) return;
 
       if (matchData) {
-        let playerB = matchData.player_b;
-        if (!playerB && roundsData && roundsData.length > 0) {
-            const playerBEntry = roundsData.find(r => r.player_address.toLowerCase() !== matchData.player_a.toLowerCase());
-            if (playerBEntry) {
-                playerB = playerBEntry.player_address;
-                matchData.player_b = playerB;
-            }
-        }
         setMatch(matchData);
 
-        const addresses = [matchData.player_a.toLowerCase()];
-        if (playerB) addresses.push(playerB.toLowerCase());
+        const addresses = (matchData.players || []).map((p: string) => p.toLowerCase());
 
         const { data: profiles } = await supabase
           .from('agent_profiles')
@@ -254,29 +245,34 @@ export default function MatchDetail({ params }: { params: Promise<{ id: string }
 
         {/* Versus Card */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className={`p-8 flex flex-col items-center gap-4 ${match.winner === match.player_a ? 'bg-emerald-500/5' : ''}`}>
+          <div className={`p-8 flex flex-col items-center gap-4 ${match.winner === match.players[0] ? 'bg-emerald-500/5' : ''}`}>
             <div className="w-16 h-16 rounded-none bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 font-black italic text-xl">A</div>
             <div className="text-center">
               <p className="text-xl font-black text-white uppercase tracking-widest truncate max-w-[240px]">
-                {nicknames[match.player_a.toLowerCase()] || match.player_a.slice(0, 8)}
+                {nicknames[match.players[0]?.toLowerCase()] || match.players[0]?.slice(0, 8)}
               </p>
-              <p className="text-6xl font-black text-white mt-4 tabular-nums italic tracking-tighter">{match.wins_a}</p>
+              <p className="text-6xl font-black text-white mt-4 tabular-nums italic tracking-tighter">{match.wins[0] || 0}</p>
             </div>
           </div>
 
           <div className="flex flex-col items-center justify-center py-8 grayscale opacity-20">
             <Swords className="w-16 h-16 text-zinc-500 mb-2" />
-            <span className="text-[10px] font-black text-zinc-600 tracking-[0.5em] uppercase">Versus</span>
+            <div className="flex flex-col items-center gap-1">
+              <span className="text-[10px] font-black text-zinc-600 tracking-[0.5em] uppercase text-center">Versus</span>
+              <span className="text-[14px] font-black text-white italic tracking-widest">
+                {(Number(match.stake_wei || 0) / 1e6).toFixed(2)} USDC
+              </span>
+            </div>
           </div>
 
-          <div className={`p-8 flex flex-col items-center gap-4 ${match.winner === match.player_b ? 'bg-emerald-500/5' : ''}`}>
+          <div className={`p-8 flex flex-col items-center gap-4 ${match.winner === match.players[1] ? 'bg-emerald-500/5' : ''}`}>
             <div className="w-16 h-16 rounded-none bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 font-black italic text-xl">B</div>
             <div className="text-center">
               <p className="text-xl font-black text-white uppercase tracking-widest truncate max-w-[240px]">
-                {match.player_b && match.player_b !== '0x0000000000000000000000000000000000000000'
-                  ? (nicknames[match.player_b.toLowerCase()] || match.player_b.slice(0, 8)) : 'WAITING...'}
+                {match.players[1] && match.players[1] !== '0x0000000000000000000000000000000000000000'
+                  ? (nicknames[match.players[1].toLowerCase()] || match.players[1].slice(0, 8)) : 'WAITING...'}
               </p>
-              <p className="text-6xl font-black text-white mt-4 tabular-nums italic tracking-tighter">{match.wins_b}</p>
+              <p className="text-6xl font-black text-white mt-4 tabular-nums italic tracking-tighter">{match.wins[1] || 0}</p>
             </div>
           </div>
         </div>
