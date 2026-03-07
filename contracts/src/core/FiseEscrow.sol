@@ -177,18 +177,10 @@ contract FiseEscrow is MatchEscrow {
             }
         }
 
-        // 2. Volume & Royalties
-        uint256 totalPot = m.stake * m.players.length;
-        logicRegistry.recordVolume(m.logicId, totalPot);
+        // 2. Record volume in LogicRegistry
+        logicRegistry.recordVolume(m.logicId, m.totalPot);
 
-        (, address developer,,,) = logicRegistry.registry(m.logicId);
-        uint256 totalRake = (totalPot * RAKE_BPS) / 10000;
-        uint256 royalty = (totalPot * ROYALTY_BPS) / 10000; 
-        
-        _safeTransferUSDC(treasury, totalRake - royalty);
-        _safeTransferUSDC(developer, royalty);
-
-        // 3. Payout to winners
+        // 3. Payout to winners (delegates to MatchEscrow for rake/transfer)
         _settleMatch(matchId, winnerIndex);
     }
 }
