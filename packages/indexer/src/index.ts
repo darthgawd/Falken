@@ -26,7 +26,7 @@ const ESCROW_ABI = [
   { name: 'MatchJoined', type: 'event', inputs: [{ name: 'matchId', type: 'uint256', indexed: true }, { name: 'player', type: 'address', indexed: true }, { name: 'index', type: 'uint8', indexed: false }] },
   { name: 'RoundStarted', type: 'event', inputs: [{ name: 'matchId', type: 'uint256', indexed: true }, { name: 'round', type: 'uint8', indexed: false }] },
   { name: 'MoveCommitted', type: 'event', inputs: [{ name: 'matchId', type: 'uint256', indexed: true }, { name: 'round', type: 'uint8', indexed: false }, { name: 'player', type: 'address', indexed: true }] },
-  { name: 'MoveRevealed', type: 'event', inputs: [{ name: 'matchId', type: 'uint256', indexed: true }, { name: 'round', type: 'uint8', indexed: false }, { name: 'player', type: 'address', indexed: true }, { name: 'move', type: 'uint8', indexed: false }] },
+  { name: 'MoveRevealed', type: 'event', inputs: [{ name: 'matchId', type: 'uint256', indexed: true }, { name: 'round', type: 'uint8', indexed: false }, { name: 'player', type: 'address', indexed: true }, { name: 'move', type: 'uint8', indexed: false }, { name: 'salt', type: 'bytes32', indexed: false }] },
   { name: 'RoundResolved', type: 'event', inputs: [{ name: 'matchId', type: 'uint256', indexed: true }, { name: 'round', type: 'uint8', indexed: false }, { name: 'winnerIndex', type: 'uint8', indexed: false }] },
   { name: 'MatchSettled', type: 'event', inputs: [{ name: 'matchId', type: 'uint256', indexed: true }, { name: 'winner', type: 'address', indexed: false }, { name: 'payout', type: 'uint256', indexed: false }] },
   { name: 'MatchVoided', type: 'event', inputs: [{ name: 'matchId', type: 'uint256', indexed: true }, { name: 'reason', type: 'string', indexed: false }] },
@@ -46,7 +46,7 @@ const ESCROW_ABI = [
     { name: 'revealDeadline', type: 'uint256' },
     { name: 'winner', type: 'address' }
   ] }] },
-  { name: 'roundCommits', type: 'function', stateMutability: 'view', inputs: [{ name: 'matchId', type: 'uint256' }, { name: 'round', type: 'uint8' }, { name: 'player', type: 'address' }], outputs: [{ name: 'commitHash', type: 'bytes32' }, { name: 'move', type: 'uint8' }, { name: 'salt', type: 'bytes32' }, { name: 'revealed', type: 'bool' }] },
+  { name: 'getRoundStatus', type: 'function', stateMutability: 'view', inputs: [{ name: 'matchId', type: 'uint256' }, { name: 'round', type: 'uint8' }, { name: 'player', type: 'address' }], outputs: [{ name: 'commitHash', type: 'bytes32' }, { name: 'salt', type: 'bytes32' }, { name: 'revealed', type: 'bool' }] },
 ];
 
 const processedLogIds = new Set<string>();
@@ -143,14 +143,10 @@ export async function startIndexer() {
 }
 
 async function processLog(log: any) {
-  const { eventName, args, blockNumber } = log;
+  const { eventName, args, blockNumber, transactionHash: txHash } = log;
   const mId = args.matchId ? getDbMatchId(args.matchId) : null;
 
-  if (mId && eventName !== 'MatchCreated') {
-    await ensureMatchExists(mId, BigInt(args.matchId));
-  }
-
-  logger.info({ eventName, matchId: mId }, 'Processing event');
+  logger.info({ eventName, txHash, mId }, 'Processing log details');
 
   if (eventName === 'MatchCreated') {
     const { error } = await supabase.from('matches').upsert({ 
@@ -205,38 +201,39 @@ async function processLog(log: any) {
     }).eq('match_id', mId);
   } else if (eventName === 'MoveCommitted') {
     // Get player index from match
-    const { data: match } = await supabase.from('matches').select('players').eq('match_id', mId).single();
+    const { data: match } = await supabase.from('matches').select('players, max_players').eq('match_id', mId).single();
     const playerIndex = match?.players?.indexOf(args.player.toLowerCase()) ?? 0;
     
-    const { error } = await supabase.from('rounds').upsert({
+    await supabase.from('rounds').upsert({
       match_id: mId,
       round_number: args.round,
       player_address: args.player.toLowerCase(),
       player_index: playerIndex,
       revealed: false,
-      commit_tx_hash: log.transactionHash
+      commit_tx_hash: txHash
     }, { onConflict: 'match_id,round_number,player_address' });
-    
-    if (error) {
-      logger.error({ mId, error }, 'MoveCommitted upsert FAILED');
-    } else {
-      logger.info({ mId, round: args.round, player: args.player.toLowerCase(), playerIndex }, 'MoveCommitted recorded');
+
+    // Check if match should transition to REVEAL phase in DB
+    const { count } = await supabase.from('rounds').select('*', { count: 'exact', head: true }).match({ match_id: mId, round_number: args.round });
+    if (count && count >= (match?.max_players || 2)) {
+        await supabase.from('matches').update({ phase: 'REVEAL' }).eq('match_id', mId);
+        logger.info({ mId }, 'Match phase updated to REVEAL');
     }
+    
   } else if (eventName === 'MoveRevealed') {
-    // Always upsert - handles both update and insert cases
-    const { data: match } = await supabase.from('matches').select('players').eq('match_id', mId).single();
+    const { data: match } = await supabase.from('matches').select('players, max_players').eq('match_id', mId).single();
     const playerIndex = match?.players?.indexOf(args.player.toLowerCase()) ?? 0;
     
-    // Fetch salt from contract (not in event)
+    // Fetch salt from contract using correct V3 ABI
     let salt = null;
     try {
-      const commitData = await publicClient.readContract({
+      const roundStatus = await publicClient.readContract({
         address: ESCROW_ADDRESS as `0x${string}`,
         abi: ESCROW_ABI,
-        functionName: 'roundCommits',
+        functionName: 'getRoundStatus',
         args: [BigInt(args.matchId), args.round, args.player]
       }) as any;
-      salt = commitData[2]; // salt is 3rd return value
+      salt = roundStatus[1]; // salt is 2nd return value in getRoundStatus
     } catch (err: any) {
       logger.warn({ mId, player: args.player.toLowerCase(), err: err.message }, 'Failed to fetch salt from contract');
     }
@@ -249,13 +246,23 @@ async function processLog(log: any) {
       move: args.move,
       salt: salt,
       revealed: true,
-      reveal_tx_hash: log.transactionHash
+      reveal_tx_hash: txHash
     }, { onConflict: 'match_id,round_number,player_address' });
     
     if (upsertError) {
       logger.error({ mId, error: upsertError }, 'MoveRevealed upsert FAILED');
     } else {
       logger.info({ mId, round: args.round, player: args.player.toLowerCase(), move: args.move, hasSalt: !!salt }, 'MoveRevealed recorded');
+      
+      // Update state_description when everyone has revealed
+      const { count } = await supabase.from('rounds').select('*', { count: 'exact', head: true })
+        .match({ match_id: mId, round_number: args.round, revealed: true });
+        
+      if (count && count >= (match?.max_players || 2)) {
+          await supabase.from('matches').update({ 
+            state_description: "Both players revealed. Processing resolution..."
+          }).eq('match_id', mId);
+      }
     }
   } else if (eventName === 'RoundResolved') {
     // winnerIndex 255 = Draw
