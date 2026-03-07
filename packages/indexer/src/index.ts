@@ -290,18 +290,20 @@ async function processLog(log: any) {
     }) as any;
     
     await supabase.from('matches').update({ 
-      wins: matchData.wins,
+      wins: Array.from(matchData.wins).map(w => Number(w)),
+      current_round: Number(matchData.currentRound),
       total_pot: matchData.totalPot.toString(),
-      draw_counter: matchData.drawCounter
+      draw_counter: matchData.drawCounter,
+      phase: Number(matchData.phase) === 0 ? 'COMMIT' : 'REVEAL'
     }).eq('match_id', mId);
 
   } else if (eventName === 'MatchSettled') {
     await supabase.from('matches').update({ 
       status: 'SETTLED', 
       winner: args.winner.toLowerCase(), 
-      payout_amount: args.payout.toString(),
+      total_pot: args.payout.toString(),
       phase: 'COMPLETE',
-      settle_tx_hash: log.transactionHash
+      settle_tx_hash: txHash
     }).eq('match_id', mId);
   } else if (eventName === 'MatchVoided') {
     await supabase.from('matches').update({ status: 'VOIDED', phase: 'COMPLETE' }).eq('match_id', mId);
