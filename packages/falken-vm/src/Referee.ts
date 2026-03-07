@@ -103,7 +103,7 @@ export class Referee {
 
   private normalizeResult(result: any, context: MatchContext): RoundWinner {
     // 255 is the protocol standard for DRAW
-    if (result === 255 || result === 'draw' || result === 0 || result === '0') return 255;
+    if (result === 255 || result === 'draw' || result === 'DRAW') return 255;
 
     if (typeof result === 'number') {
       // If it's 1 or 2, we must ensure we map it to 0-indexed indices (0 or 1)
