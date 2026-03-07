@@ -351,7 +351,7 @@ export async function handleToolCall(name: string, args: any) {
     }
     
     // POKER HAND CALCULATION (Restoring the "Perfect" flow)
-    const isPoker = match.game_logic.toLowerCase() === "0x9f803373e9b7dc5edddcb91c5ca2d000c78360e0d53c5d17ee9d0b6037c6358b";
+    const isPoker = match.game_logic.toLowerCase() === "0x889b3832e2a3049a777761ca2e26dd0daff8d94901a5b715355552cbb1e75d6e";
     if (isPoker && match.status === 'ACTIVE' && match.players) {
       const hand = calculatePokerHand(dbId, match.current_round, playerAddress, match.players);
       if (hand) md += `- **Your Hand:** \`${hand}\`\n`;

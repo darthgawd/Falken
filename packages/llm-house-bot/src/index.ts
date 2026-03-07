@@ -86,7 +86,7 @@ class LLMHouseBot {
     
     // Default V3 Logic IDs
     this.gameLogics = [
-      "0x9f803373e9b7dc5edddcb91c5ca2d000c78360e0d53c5d17ee9d0b6037c6358b"  // Poker Blitz V3 (Final)
+      "0x889b3832e2a3049a777761ca2e26dd0daff8d94901a5b715355552cbb1e75d6e"  // Poker Blitz V3 (Final Sync)
     ];
 
     this.wallet = new ethers.Wallet(pk!, this.provider);
@@ -346,7 +346,7 @@ class LLMHouseBot {
     logger.info({ matchId, round }, '🧠 Joshua querying Gemini...');
 
     // 1. Fetch game logic source
-    const pokerId = '0xa00a45cb44b39c3dc91fb7963d2dd65c217ae5b25c20cb216c1f9431900a5d61';
+    const pokerId = '0x889b3832e2a3049a777761ca2e26dd0daff8d94901a5b715355552cbb1e75d6e';
     let handContext = '';
     
     if (logicId.toLowerCase() === pokerId) {
@@ -357,12 +357,15 @@ class LLMHouseBot {
       logger.info({ matchId, round, hand: handNames }, '🃏 Hand Dealt');
       
       handContext = `
+      GAME: Poker Blitz (5-Card Draw)
       YOUR CURRENT HAND:
       ${handNames.join('\n')}
 
       MOVE RULES:
-      - "99" to KEEP ALL cards.
-      - String of indices to DISCARD in DESCENDING order (max 2). e.g. "42", "30".
+      - "99" to STAY / KEEP ALL cards.
+      - A string of card indices to DISCARD (0-4). e.g. "0123" to discard first 4, "4" to discard only last card.
+      - Discarded cards will be replaced with new ones from the deck.
+      - Be strategic! Try to form pairs, three of a kind, flushes, or straights.
       `;
     }
 

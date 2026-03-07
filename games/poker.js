@@ -19,6 +19,21 @@ export default class ShowdownBlitzPoker {
     };
   }
 
+  generateDeck(seedStr) {
+    let hash = 0;
+    for (let i = 0; i < seedStr.length; i++) {
+      hash = ((hash << 5) - hash) + seedStr.charCodeAt(i);
+      hash |= 0;
+    }
+    const deck = Array.from({ length: 52 }, (_, i) => i);
+    for (let i = deck.length - 1; i > 0; i--) {
+      hash = (Math.imul(1664525, hash) + 1013904223) | 0;
+      const j = Math.abs(hash % (i + 1));
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    return deck;
+  }
+
   processMove(state, move) {
     if (state.complete || !move.player) return state;
     const player = move.player.toLowerCase();

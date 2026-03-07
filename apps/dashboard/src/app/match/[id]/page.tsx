@@ -80,12 +80,7 @@ const DICE_LOGIC = (process.env.NEXT_PUBLIC_DICE_LOGIC_ADDRESS || '').toLowerCas
 const ESCROW_ADDRESS = (process.env.NEXT_PUBLIC_ESCROW_ADDRESS || '').toLowerCase();
 
 const POKER_LOGIC_IDS = [
-  '0x9f803373e9b7dc5edddcb91c5ca2d000c78360e0d53c5d17ee9d0b6037c6358b',
-  '0xa00a45cb44b39c3dc91fb7963d2dd65c217ae5b25c20cb216c1f9431900a5d61',
-  '0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43',
-  '0xec63afc7c67678adbe7a60af04d49031878d1e78eff9758b1b79edeb7546dfdf',
-  '0x5f164061c4cbb981098161539f7f691650e0c245be54ade84ea5b57496955846',
-  '0x61266711df04ebe17432b3482471e64c69150e370a9c558657b28944233b97d1'
+  '0x889b3832e2a3049a777761ca2e26dd0daff8d94901a5b715355552cbb1e75d6e' // Official Poker Blitz V3 (Sync)
 ].map(id => id.toLowerCase());
 
 export default function MatchDetail({ params }: { params: Promise<{ id: string }> }) {
@@ -170,17 +165,12 @@ export default function MatchDetail({ params }: { params: Promise<{ id: string }
   const sortedRounds = Object.values(groupedRounds).sort((a, b) => b.round - a.round);
 
   const getFiseMoveLabel = (move: number, logicId: string) => {
-    const pokerLogicIdV3Final = '0x9f803373e9b7dc5edddcb91c5ca2d000c78360e0d53c5d17ee9d0b6037c6358b';
-    const pokerLogicIdV3 = '0xa00a45cb44b39c3dc91fb7963d2dd65c217ae5b25c20cb216c1f9431900a5d61';
-    const pokerLogicIdV4 = '0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43';
-    const pokerLogicIdV5 = '0xec63afc7c67678adbe7a60af04d49031878d1e78eff9758b1b79edeb7546dfdf';
-    const pokerLogicIdV6 = '0x5f164061c4cbb981098161539f7f691650e0c245be54ade84ea5b57496955846';
-    const pokerLogicIdV1Today = '0x61266711df04ebe17432b3482471e64c69150e370a9c558657b28944233b97d1';
+    const pokerLogicIdOfficial = '0x889b3832e2a3049a777761ca2e26dd0daff8d94901a5b715355552cbb1e75d6e';
     const rpsLogicId = '0xf2f80f1811f9e2c534946f0e8ddbdbd5c1e23b6e48772afe3bccdb9f2e1cfdf3';
 
     const cleanLogicId = (logicId || '').toLowerCase();
 
-    if (cleanLogicId === pokerLogicIdV3Final || cleanLogicId === pokerLogicIdV3 || cleanLogicId === pokerLogicIdV4 || cleanLogicId === pokerLogicIdV5 || cleanLogicId === pokerLogicIdV6 || cleanLogicId === pokerLogicIdV1Today) {
+    if (cleanLogicId === pokerLogicIdOfficial) {
       if (Number(move) === 99) return '🃏 KEEP ALL';
       const count = move.toString().length;
       return `🃏 ${count} ${count === 1 ? 'CARD' : 'CARDS'} DISCARDED`;
@@ -278,7 +268,7 @@ export default function MatchDetail({ params }: { params: Promise<{ id: string }
         </div>
 
         {/* Pre-Game Table - Shows before any rounds start */}
-        {POKER_LOGIC_IDS.includes(match.game_logic?.toLowerCase()) && sortedRounds.length === 0 && (
+        {POKER_LOGIC_IDS.includes(match.game_logic?.toLowerCase()) && (match.status === 'OPEN' || match.status === 'ACTIVE' || match.status === 'SETTLED') && (
           <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl overflow-hidden mb-4">
             <div className="bg-zinc-900 px-6 py-3 border-b border-zinc-800 flex justify-between items-center">
               <div className="flex flex-col">
