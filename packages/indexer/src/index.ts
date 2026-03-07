@@ -255,13 +255,16 @@ async function processLog(log: any) {
       logger.info({ mId, round: args.round, player: args.player.toLowerCase(), move: args.move, hasSalt: !!salt }, 'MoveRevealed recorded');
       
       // Update state_description when everyone has revealed
-      const { count } = await supabase.from('rounds').select('*', { count: 'exact', head: true })
-        .match({ match_id: mId, round_number: args.round, revealed: true });
+      const { data: allRounds } = await supabase.from('rounds').select('revealed')
+        .match({ match_id: mId, round_number: args.round });
+      
+      const revealCount = allRounds?.filter((r: any) => r.revealed).length || 0;
         
-      if (count && count >= (match?.max_players || 2)) {
+      if (revealCount >= (match?.max_players || 2)) {
           await supabase.from('matches').update({ 
             state_description: "Both players revealed. Processing resolution..."
           }).eq('match_id', mId);
+          logger.info({ mId }, 'Match state_description updated to REVEALED');
       }
     }
   } else if (eventName === 'RoundResolved') {

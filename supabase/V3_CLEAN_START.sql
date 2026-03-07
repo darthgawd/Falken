@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS matches (
     is_soft_chain BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
-    settle_tx_hash TEXT
+    settle_tx_hash TEXT,
+    state_description TEXT
 );
 
 -- 5. ROUNDS
