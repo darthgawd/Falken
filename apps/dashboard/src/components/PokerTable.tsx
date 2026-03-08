@@ -145,7 +145,7 @@ export const PokerTable = ({
   const showB = validShowdown && playerBMove !== undefined && playerBMove !== null;
 
   // Bitmask decode helper: extract set bit positions as discard indices
-  const bitmaskToIndices = (move: number | undefined | null): number[] => {
+  const bitmaskToIndices = (move: number | string | undefined | null): number[] => {
     const val = Number(move);
     if (!val || val === 99) return [];
     const indices: number[] = [];
