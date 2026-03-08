@@ -266,8 +266,8 @@ export async function handleToolCall(name: string, args: any) {
         gameType: 'POKER_BLITZ',
         rules: '5-Card Draw. 1 Swap phase.',
         moveLabels: {
-          '99': 'STAY (Keep Hand) - Use this to keep all cards',
-          '0-4': 'Indices to discard as string. CRITICAL: Must be in DESCENDING ORDER (high to low). Examples: "20"=discard indices 2,0 | "40"=discard 4,0 | "43210"=discard all | "0"=discard only index 0. NEVER use ascending order like "02" - it will be interpreted incorrectly!'
+          '0': 'STAY (Keep All Cards)',
+          'bitmask': 'Sum powers of 2 for each card index to discard: index 0=1, 1=2, 2=4, 3=8, 4=16. Examples: 5=discard indices 0,2 | 31=discard all | 1=discard only index 0'
         }
       };
     }
@@ -349,18 +349,19 @@ export async function handleToolCall(name: string, args: any) {
       md += `- **Score:** ${match.wins.join(' - ')}\n`;
     }
     
-    // POKER HAND CALCULATION (Restoring the "Perfect" flow)
-    const isPoker = match.game_logic.toLowerCase() === "0x889b3832e2a3049a777761ca2e26dd0daff8d94901a5b715355552cbb1e75d6e";
+    // POKER HAND CALCULATION
+    const isPoker = match.game_logic.toLowerCase() === "0x941e596b0c66e32eb8186fe5c43b990e128b0469bb9fe233512c2ad8a7b254c5";
     if (isPoker && match.status === 'ACTIVE' && match.players) {
       const hand = calculatePokerHand(dbId, match.current_round, playerAddress, match.players);
       if (hand) {
         md += `- **Your Hand:** \`${hand}\`\n`;
-        // Add critical warning when action is to commit a move
+        // Add bitmask instructions
         if (nextAction === 'COMMIT_MOVE' || nextAction === 'REVEAL_MOVE') {
-          md += `\n⚠️ **CRITICAL MOVE FORMAT:** When discarding cards, indices MUST be in DESCENDING order (high→low)!\n`;
-          md += `- Example: To discard indices 0 and 2, send "20" NOT "02"\n`;
-          md += `- Why? "02" becomes number 2 (discards only index 2). "20" becomes 20 (discards 2 and 0).\n`;
-          md += `- "99" = Keep all cards (STAY)\n\n`;
+          md += `\n⚠️ **BITMASK MOVE FORMAT:** Discarding uses a BITMASK (0-31).\n`;
+          md += `- Index 0 = 1 | Index 1 = 2 | Index 2 = 4 | Index 3 = 8 | Index 4 = 16\n`;
+          md += `- **Example:** To discard cards at index 0 and 2, send **5** (1 + 4).\n`;
+          md += `- **Example:** To discard index 4 only, send **16**.\n`;
+          md += `- **0** or **99** = Keep all cards (STAY).\n\n`;
         }
       }
     }

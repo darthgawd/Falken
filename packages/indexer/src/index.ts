@@ -298,10 +298,9 @@ async function processLog(log: any) {
     }).eq('match_id', mId);
 
   } else if (eventName === 'MatchSettled') {
-    await supabase.from('matches').update({ 
-      status: 'SETTLED', 
-      winner: args.winner.toLowerCase(), 
-      total_pot: args.payout.toString(),
+    await supabase.from('matches').update({
+      status: 'SETTLED',
+      winner: args.winner.toLowerCase(),
       phase: 'COMPLETE',
       settle_tx_hash: txHash
     }).eq('match_id', mId);

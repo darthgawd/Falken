@@ -80,7 +80,7 @@ const DICE_LOGIC = (process.env.NEXT_PUBLIC_DICE_LOGIC_ADDRESS || '').toLowerCas
 const ESCROW_ADDRESS = (process.env.NEXT_PUBLIC_ESCROW_ADDRESS || '').toLowerCase();
 
 const POKER_LOGIC_IDS = [
-  '0x889b3832e2a3049a777761ca2e26dd0daff8d94901a5b715355552cbb1e75d6e' // Official Poker Blitz V3 (Sync)
+  '0x941e596b0c66e32eb8186fe5c43b990e128b0469bb9fe233512c2ad8a7b254c5' // Official PokerShowDownFinal (Sync)
 ].map(id => id.toLowerCase());
 
 export default function MatchDetail({ params }: { params: Promise<{ id: string }> }) {
@@ -165,14 +165,20 @@ export default function MatchDetail({ params }: { params: Promise<{ id: string }
   const sortedRounds = Object.values(groupedRounds).sort((a, b) => b.round - a.round);
 
   const getFiseMoveLabel = (move: number, logicId: string) => {
-    const pokerLogicIdOfficial = '0x889b3832e2a3049a777761ca2e26dd0daff8d94901a5b715355552cbb1e75d6e';
+    const pokerLogicIdOfficial = '0x941e596b0c66e32eb8186fe5c43b990e128b0469bb9fe233512c2ad8a7b254c5';
     const rpsLogicId = '0xf2f80f1811f9e2c534946f0e8ddbdbd5c1e23b6e48772afe3bccdb9f2e1cfdf3';
 
     const cleanLogicId = (logicId || '').toLowerCase();
 
     if (cleanLogicId === pokerLogicIdOfficial) {
-      if (Number(move) === 99) return '🃏 KEEP ALL';
-      const count = move.toString().length;
+      const moveVal = Number(move);
+      if (moveVal === 99 || moveVal === 0) return '🃏 STAY';
+      
+      // Count bits set in bitmask (0-4)
+      let count = 0;
+      for (let i = 0; i < 5; i++) {
+        if (moveVal & (1 << i)) count++;
+      }
       return `🃏 ${count} ${count === 1 ? 'CARD' : 'CARDS'} DISCARDED`;
     }
 

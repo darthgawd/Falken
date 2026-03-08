@@ -62,6 +62,7 @@ const ESCROW_ABI = [
 
 const ERC20_ABI = [
   "function approve(address spender, uint256 amount) returns (bool)",
+  "function allowance(address owner, address spender) view returns (uint256)",
   "function balanceOf(address account) view returns (uint256)"
 ];
 
@@ -86,7 +87,7 @@ class LLMHouseBot {
     
     // Default V3 Logic IDs
     this.gameLogics = [
-      "0x889b3832e2a3049a777761ca2e26dd0daff8d94901a5b715355552cbb1e75d6e"  // Poker Blitz V3 (Final Sync)
+      "0x941e596b0c66e32eb8186fe5c43b990e128b0469bb9fe233512c2ad8a7b254c5"  // PokerShowDownFinal V3
     ];
 
     this.wallet = new ethers.Wallet(pk!, this.provider);
@@ -127,9 +128,17 @@ class LLMHouseBot {
   async ensureApproval() {
     try {
       logger.info('Checking USDC approval...');
-      const tx = await this.usdc.approve(this.escrowAddress, ethers.MaxUint256);
-      await tx.wait();
-      logger.info('✅ USDC approved for Escrow');
+      const allowance = await this.usdc.allowance(this.wallet.address, this.escrowAddress);
+      
+      // If allowance is less than 100 USDC, re-approve
+      if (allowance < ethers.parseUnits("100", 6)) {
+        logger.info({ current: allowance.toString() }, 'Low allowance, approving...');
+        const tx = await this.usdc.approve(this.escrowAddress, ethers.MaxUint256);
+        await tx.wait();
+        logger.info('✅ USDC approved for Escrow');
+      } else {
+        logger.info('✅ USDC allowance sufficient');
+      }
     } catch (err: any) {
       logger.error({ err: err.message }, 'Failed to approve USDC');
     }
@@ -343,13 +352,13 @@ class LLMHouseBot {
   }
 
   async getLLMMove(matchId: number, round: number, logicId: string, salt: string, playerIndex: number): Promise<number> {
-    logger.info({ matchId, round }, '🧠 Joshua querying Gemini...');
+    logger.info({ matchId, round, logicId }, '🧠 Joshua querying Gemini...');
 
     // 1. Fetch game logic source
-    const pokerId = '0x889b3832e2a3049a777761ca2e26dd0daff8d94901a5b715355552cbb1e75d6e';
+    const officialPokerId = '0x941e596b0c66e32eb8186fe5c43b990e128b0469bb9fe233512c2ad8a7b254c5';
     let handContext = '';
     
-    if (logicId.toLowerCase() === pokerId) {
+    if (logicId.toLowerCase() === officialPokerId.toLowerCase()) {
       const hand = this.computePokerHand(matchId.toString(), round, playerIndex);
       const handNames = hand.map((c, i) => `  Index ${i}: ${this.cardName(c)}`);
       
@@ -361,11 +370,22 @@ class LLMHouseBot {
       YOUR CURRENT HAND:
       ${handNames.join('\n')}
 
-      MOVE RULES:
-      - "99" to STAY / KEEP ALL cards.
-      - A string of card indices to DISCARD (0-4). e.g. "0123" to discard first 4, "4" to discard only last card.
-      - Discarded cards will be replaced with new ones from the deck.
-      - Be strategic! Try to form pairs, three of a kind, flushes, or straights.
+      MOVE RULES (BITMASK ENCODING):
+      - Discarding uses a bitmask where each bit (0-4) corresponds to a card index.
+      - Bit 0 (Value 1) = Discard Index 0
+      - Bit 1 (Value 2) = Discard Index 1
+      - Bit 2 (Value 4) = Discard Index 2
+      - Bit 3 (Value 8) = Discard Index 3
+      - Bit 4 (Value 16) = Discard Index 4
+      
+      EXAMPLES:
+      - Send "5" to discard index 0 and 2 (1 + 4).
+      - Send "16" to discard only index 4.
+      - Send "31" to discard ALL cards (1 + 2 + 4 + 8 + 16).
+      - Send "0" or "99" to STAY / KEEP ALL cards.
+      
+      Respond ONLY with the SUM of the bit values for the cards you want to discard.
+      Be strategic! Try to form pairs, three of a kind, flushes, or straights.
       `;
     }
 
@@ -389,19 +409,15 @@ class LLMHouseBot {
       
       const json = JSON.parse(rawText.substring(rawText.indexOf('{'), rawText.lastIndexOf('}') + 1));
       
-      // Parse move and ensure indices are in DESCENDING order to avoid leading zero issues
-      // "024" becomes "420" so that when converted to number, all indices are preserved
-      let moveStr = json.move.toString();
-      if (moveStr !== '99' && moveStr.length > 1) {
-        moveStr = moveStr.split('').sort((a: string, b: string) => Number(b) - Number(a)).join('');
-      }
-      const move = Number(moveStr);
+      let move = Number(json.move);
+      // Clamp bitmask to valid range 0-31
+      if (move < 0 || move > 31) move = 0;
       
       logger.info({ matchId, round, reasoning: json.reasoning, move, original: json.move }, '🧠 Strategic Decision');
       return move;
     } catch (e: any) {
-      logger.error({ error: e.message, prompt }, '🧠 Gemini failed, defaulting to STAY (99)');
-      return 99; // Default to stay
+      logger.error({ error: e.message, prompt }, '🧠 Gemini failed, defaulting to STAY (0)');
+      return 0; // Default to stay (bitmask 0 = keep all)
     }
   }
 }

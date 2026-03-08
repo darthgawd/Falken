@@ -144,16 +144,27 @@ export const PokerTable = ({
   // We only show B's cards if validShowdown is true (both revealed)
   const showB = validShowdown && playerBMove !== undefined && playerBMove !== null;
 
+  // Bitmask decode helper: extract set bit positions as discard indices
+  const bitmaskToIndices = (move: number | undefined | null): number[] => {
+    const val = Number(move);
+    if (!val || val === 99) return [];
+    const indices: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      if (val & (1 << i)) indices.push(i);
+    }
+    return indices;
+  };
+
   // Player A Hand
   const initialHandA = deck.slice(0, 5);
-  const discardIndicesA = playerAMove?.toString() === '99' ? [] : playerAMove?.toString().split('').map(Number) || [];
+  const discardIndicesA = bitmaskToIndices(playerAMove);
   let finalHandA = [...initialHandA];
   discardIndicesA.forEach((idx, i) => { if (idx >= 0 && idx < 5) finalHandA[idx] = deck[10 + i]; });
   const handRankA = getHandRank(finalHandA);
 
   // Player B Hand
   const initialHandB = deck.slice(5, 10);
-  const discardIndicesB = playerBMove?.toString() === '99' ? [] : playerBMove?.toString().split('').map(Number) || [];
+  const discardIndicesB = bitmaskToIndices(playerBMove);
   let finalHandB = [...initialHandB];
   discardIndicesB.forEach((idx, i) => { if (idx >= 0 && idx < 5) finalHandB[idx] = deck[15 + i]; });
   const handRankB = getHandRank(finalHandB);

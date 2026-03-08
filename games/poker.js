@@ -48,7 +48,16 @@ export default class ShowdownBlitzPoker {
     const initialHand = deck.slice(initialHandOffset, initialHandOffset + 5);
     
     const moveData = move.moveData.toString();
-    const discardIndices = moveData === '99' ? [] : moveData.split('').map(Number);
+    // Bitmask encoding: each bit 0-4 represents a card index to discard
+    // e.g. 5 (binary 00101) = discard indices 0 and 2
+    // 0 = STAY (keep all), 99 = legacy STAY fallback
+    const discardIndices = [];
+    const moveVal = Number(moveData);
+    if (moveVal !== 99) {
+      for (let i = 0; i < 5; i++) {
+        if (moveVal & (1 << i)) discardIndices.push(i);
+      }
+    }
     state.discards[player] = discardIndices;
     
     let finalHand = [...initialHand];

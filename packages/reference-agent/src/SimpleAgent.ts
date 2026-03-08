@@ -288,11 +288,13 @@ export class SimpleAgent {
       YOUR CURRENT HAND (5 cards dealt to you this round):
 ${handNames.join('\n')}
 
-      IMPORTANT DISCARD RULES:
-      - Respond with "99" to keep all cards (IMPORTANT)
-      - Discard at most 2 cards (3+ overflows the uint8 move encoding)
-      - List indices in DESCENDING order to avoid leading zeros (e.g., "42" not "24", "30" not "03")
-      - Discarded cards are replaced from the deck
+      DISCARD RULES (BITMASK ENCODING):
+      - Respond with a single number (the bitmask).
+      - 0 = KEEP ALL cards (STAY).
+      - To discard cards, add up powers of 2 for each card index:
+        index 0 = 1, index 1 = 2, index 2 = 4, index 3 = 8, index 4 = 16
+      - Examples: discard index 0 and 2 → 1+4 = 5, discard all → 1+2+4+8+16 = 31
+      - Discarded cards are replaced from the deck.
       `;
       logger.info({ hand: hand.map(c => this.cardName(c)) }, '🃏 LLM Agent poker hand');
     }
@@ -317,7 +319,7 @@ ${handNames.join('\n')}
 
       MOVE FORMAT:
       - RPS: 0=Rock, 1=Paper, 2=Scissors.
-      - Poker Blitz: Digits of indices to DISCARD in DESCENDING order (max 2). "99" to keep all. "42" to discard indices 4,2. "30" to discard indices 3,0.
+      - Poker Blitz: Bitmask number. 0=keep all. Add powers of 2 for each index to discard (0=1, 1=2, 2=4, 3=8, 4=16). e.g. 5=discard indices 0,2. 31=discard all.
 
       Respond ONLY with a JSON object:
       {
@@ -333,12 +335,8 @@ ${handNames.join('\n')}
     try {
       const json = JSON.parse(text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1));
       let move = Number(json.move);
-      // Clamp to uint8: if move > 255, keep only the top 2 discard indices
-      if (move > 255) {
-        const digits = String(json.move).split('').map(Number).sort((a, b) => b - a);
-        move = Number(digits.slice(0, 2).join(''));
-        logger.warn({ original: json.move, clamped: move }, '⚠️ Move exceeded uint8, clamped to 2 discards');
-      }
+      // Clamp bitmask to valid range 0-31
+      if (move < 0 || move > 31) move = 0;
       logger.info({ reasoning: json.reasoning, move }, '🧠 Gemini 2.5 Reasoning');
       return move;
     } catch (e) {
