@@ -63,7 +63,6 @@ const walletClient = agentAccount
 
 const ESCROW_ADDRESS = (process.env.ESCROW_ADDRESS || '0x0000000000000000000000000000000000000000').toLowerCase() as `0x${string}`;
 const LOGIC_REGISTRY_ADDRESS = (process.env.LOGIC_REGISTRY_ADDRESS || '0x0000000000000000000000000000000000000000').toLowerCase() as `0x${string}`;
-const PRICE_FEED_ADDRESS = '0x4adC67696ba3F238D520607D003F756024f60C77' as `0x${string}`;
 const MASTER_ENCRYPTION_KEY = process.env.MASTER_ENCRYPTION_KEY || 'default_key_32_chars_for_dev_only_!!';
 
 /**
@@ -76,29 +75,6 @@ function encryptKey(privateKey: string): string {
   encrypted += cipher.final('hex');
   const authTag = cipher.getAuthTag().toString('hex');
   return `${iv.toString('hex')}:${authTag}:${encrypted}`;
-}
-
-const AGGREGATOR_ABI = [
-  { name: 'latestRoundData', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ name: 'roundId', type: 'uint80' }, { name: 'answer', type: 'int256' }, { name: 'startedAt', type: 'uint256' }, { name: 'updatedAt', type: 'uint256' }, { name: 'answeredInRound', type: 'uint80' }] }
-] as const;
-
-/**
- * Converts USD amount to Wei using the live Chainlink Price Feed.
- */
-async function usdToWei(usdAmount: number): Promise<bigint> {
-  const data = await publicClient.readContract({
-    address: PRICE_FEED_ADDRESS,
-    abi: AGGREGATOR_ABI,
-    functionName: 'latestRoundData',
-  });
-  
-  const ethPrice = data[1]; // 8 decimals
-  if (ethPrice <= 0n) throw new Error('Invalid price from oracle');
-
-  // Formula: (usdAmount * 1e18 * 1e8) / ethPrice
-  // We use 1e18 because usdAmount is a standard number (e.g. 5.00)
-  const usdAmountBig = BigInt(Math.floor(usdAmount * 1e8));
-  return (usdAmountBig * 10n**18n) / ethPrice;
 }
 
 logger.info({ 
@@ -227,6 +203,8 @@ export const TOOLS = [
   { name: 'list_available_games', description: 'Unified discovery for all games in the arena (Solidity + JavaScript). Returns addresses/CIDs and logic types.', inputSchema: { type: 'object' } },
   { name: 'spawn_hosted_agent', description: 'Step 1 (Factory): Generate a new hosted agent with an encrypted wallet.', inputSchema: { type: 'object', properties: { nickname: { type: 'string' }, archetype: { type: 'string' }, llmTier: { type: 'string' }, managerAddress: { type: 'string' } }, required: ['nickname', 'archetype', 'llmTier', 'managerAddress'] } },
   { name: 'get_agent_directives', description: 'Checks for manual commands from the manager (e.g. FOLD, STAY, AGGRESSIVE).', inputSchema: { type: 'object', properties: { agentAddress: { type: 'string' } }, required: ['agentAddress'] } },
+  { name: 'store_match_secret', description: 'Universal Memory: Save a move and salt to the database vault. Use this to remember your moves across sessions.', inputSchema: { type: 'object', properties: { matchId: { type: 'string' }, round: { type: 'number' }, move: { type: 'number' }, salt: { type: 'string' }, playerAddress: { type: 'string' } }, required: ['matchId', 'round', 'move', 'salt', 'playerAddress'] } },
+  { name: 'get_match_secret', description: 'Universal Memory: Retrieve a saved salt and move from the vault for a specific match and round.', inputSchema: { type: 'object', properties: { matchId: { type: 'string' }, round: { type: 'number' }, playerAddress: { type: 'string' } }, required: ['matchId', 'round', 'playerAddress'] } },
   { name: 'execute_transaction', description: 'Autonomous Step: Signs and broadcasts a transaction prepared by any prep_ tool using the local AGENT_PRIVATE_KEY. Only use this if you want to act autonomously.', inputSchema: { type: 'object', properties: { to: { type: 'string' }, data: { type: 'string' }, value: { type: 'string' }, gasLimit: { type: 'string' } }, required: ['to', 'data'] } },
   { name: 'ping', description: 'Simple connection test.', inputSchema: { type: 'object', properties: { message: { type: 'string' } } } },
 ];
@@ -412,6 +390,21 @@ export async function handleToolCall(name: string, args: any) {
     const { data: match } = await supabase.from('matches').select('current_round').eq('match_id', dbId).single();
     if (!match) throw new Error('Match not found');
     const salt = `0x${crypto.randomBytes(32).toString('hex')}` as `0x${string}`;
+    
+    // Auto-Persist to Hosted Agent Salts
+    try {
+      await supabase.from('hosted_agent_salts').upsert({
+        agent_address: playerAddress.toLowerCase(),
+        match_id: dbId,
+        round_number: match.current_round,
+        move_value: move,
+        salt_value: salt
+      }, { onConflict: 'agent_address,match_id,round_number' });
+      logger.info({ matchId: dbId, round: match.current_round }, '✅ Secret auto-persisted to vault');
+    } catch (err: any) {
+      logger.error({ err: err.message }, '⚠️ Failed to auto-persist salt');
+    }
+
     // Hash MUST match MatchEscrow.sol: keccak256(abi.encodePacked("FALKEN_V1", address(this), _matchId, uint256(m.currentRound), msg.sender, uint256(_move), _salt))
     const escrowAddress = process.env.ESCROW_ADDRESS as `0x${string}`;
     const hash = keccak256(encodePacked(
@@ -419,7 +412,7 @@ export async function handleToolCall(name: string, args: any) {
       ["FALKEN_V1", escrowAddress, onChainId, BigInt(match.current_round), playerAddress as `0x${string}`, BigInt(move), salt]
     ));
     const tx = await prepTxWithBuffer('commitMove', [onChainId, hash], 0n, playerAddress as `0x${string}`);
-    return { ...tx, salt, move, matchId: dbId, persistence_required: true };
+    return { ...tx, salt, move, matchId: dbId, persistence_required: false, vault_status: 'SAVED' };
   }
 
   if (name === 'prep_join_match_tx') {
@@ -454,6 +447,32 @@ export async function handleToolCall(name: string, args: any) {
   if (name === 'prep_withdraw_tx') {
     const { address } = (args || {}) as { address: string };
     return await prepTxWithBuffer('withdraw', [], 0n, address as `0x${string}`);
+  }
+
+  if (name === 'store_match_secret') {
+    const { matchId, round, move, salt, playerAddress } = (args || {}) as { matchId: string; round: number; move: number; salt: string; playerAddress: string };
+    const { dbId } = parseMatchId(matchId);
+    const { error } = await supabase.from('hosted_agent_salts').upsert({
+      agent_address: playerAddress.toLowerCase(),
+      match_id: dbId,
+      round_number: round,
+      move_value: move,
+      salt_value: salt
+    }, { onConflict: 'agent_address,match_id,round_number' });
+    if (error) throw new Error(`Vault Error: ${error.message}`);
+    return `### ✅ Secret Stored\n- Match: ${matchId}\n- Round: ${round}`;
+  }
+
+  if (name === 'get_match_secret') {
+    const { matchId, round, playerAddress } = (args || {}) as { matchId: string; round: number; playerAddress: string };
+    const { dbId } = parseMatchId(matchId);
+    const { data, error } = await supabase.from('hosted_agent_salts')
+      .select('*')
+      .match({ agent_address: playerAddress.toLowerCase(), match_id: dbId, round_number: round })
+      .single();
+    
+    if (error || !data) throw new Error(`Secret not found in vault for Match ${matchId} Round ${round}`);
+    return { move: data.move_value, salt: data.salt_value };
   }
 
   if (name === 'whitelist_game_logic') {
@@ -535,12 +554,6 @@ export async function handleToolCall(name: string, args: any) {
 
   if (name === 'list_available_games') {
     const availableGames: any[] = [];
-    const ALPHA_WHITELIST = [
-      '0x4173a4e2e54727578fd50a3f1e721827c4c97c3a2824ca469c0ec730d4264b43', // Poker Blitz v4
-      '0xec63afc7c67678adbe7a60af04d49031878d1e78eff9758b1b79edeb7546dfdf', // Poker Blitz v5
-      '0x5f164061c4cbb981098161539f7f691650e0c245be54ade84ea5b57496955846', // Poker Blitz v6
-      '0xa00a45cb44b39c3dc91fb7963d2dd65c217ae5b25c20cb216c1f9431900a5d61'  // Poker Blitz (V3 Registry)
-    ];
 
     if (LOGIC_REGISTRY_ADDRESS && LOGIC_REGISTRY_ADDRESS !== '0x0000000000000000000000000000000000000000') {
       try {
@@ -565,31 +578,19 @@ export async function handleToolCall(name: string, args: any) {
             args: [logicId]
           });
 
-          // Try to get CID from Supabase first (may be more up to date or canonical)
+          // Get Alias from Supabase for a better display name
           const { data: aliasData } = await supabase.from('logic_aliases').select('alias_name').eq('logic_id', logicId.toLowerCase()).single();
-          let finalCID = ipfsCid;
-          let gameName = aliasData?.alias_name || 'Community Game';
+          const gameName = aliasData?.alias_name || 'Community Game';
 
-          if (aliasData) {
-            // If we have an alias, try to get the metadata from logic_submissions
-            const { data: subData } = await supabase.from('logic_submissions').select('ipfs_cid').eq('game_name', "Poker Blitz (Stable)").single();
-            if (subData?.ipfs_cid) finalCID = subData.ipfs_cid;
-          }
-
-          // Only return verified games or games in our Alpha Whitelist
-          if (isVerified || ALPHA_WHITELIST.includes(logicId.toLowerCase())) {
-            if (ALPHA_WHITELIST.includes(logicId.toLowerCase())) gameName = 'POKER_BLITZ';
-
-            availableGames.push({
-              id: logicId,
-              name: gameName,
-              cid: finalCID,
-              developer,
-              type: 'JAVASCRIPT',
-              isVerified,
-              description: 'Active game logic via FISE.'
-            });
-          }
+          availableGames.push({
+            id: logicId,
+            name: gameName,
+            cid: ipfsCid,
+            developer,
+            type: 'JAVASCRIPT',
+            isVerified,
+            description: 'Active game logic via FISE.'
+          });
         }
       } catch (err) {
         logger.error({ err }, 'Error fetching from LogicRegistry');
@@ -601,7 +602,7 @@ export async function handleToolCall(name: string, args: any) {
     let md = "### 🕹️ Available FISE Games\n\n";
     availableGames.forEach(g => {
       const verifiedTag = g.isVerified ? "✅ Verified" : "⚠️ Alpha";
-      md += `- **${g.name}** | ID: \`${g.id.slice(0,10)}...\` | ${verifiedTag}\n  - CID: \`${g.cid}\`\n`;
+      md += `- **${g.name}** | ID: \`${g.id.slice(0,14)}...\` | ${verifiedTag}\n  - CID: \`${g.cid}\`\n`;
     });
     return md;
   }

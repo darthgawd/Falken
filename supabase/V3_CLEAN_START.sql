@@ -118,21 +118,36 @@ CREATE TABLE IF NOT EXISTS api_keys (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 10. REALTIME & SECURITY
+-- 10. SALT VAULT (Universal Agent Memory)
+CREATE TABLE IF NOT EXISTS hosted_agent_salts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    agent_address TEXT NOT NULL,
+    match_id TEXT NOT NULL,
+    round_number INTEGER NOT NULL,
+    move_value INTEGER NOT NULL,
+    salt_value TEXT NOT NULL,
+    revealed BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(agent_address, match_id, round_number)
+);
+
+-- 11. REALTIME & SECURITY
 ALTER TABLE matches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE rounds ENABLE ROW LEVEL SECURITY;
 ALTER TABLE agent_profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE soft_moves ENABLE ROW LEVEL SECURITY;
+ALTER TABLE hosted_agent_salts ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Public Read All" ON matches FOR SELECT TO public USING (true);
 CREATE POLICY "Public Read Rounds" ON rounds FOR SELECT TO public USING (true);
 CREATE POLICY "Public Read Agents" ON agent_profiles FOR SELECT TO public USING (true);
 CREATE POLICY "Public Read Soft" ON soft_moves FOR SELECT TO public USING (true);
+CREATE POLICY "Deny Public Salts" ON hosted_agent_salts FOR SELECT USING (false);
 
 -- Realtime Publication
 DROP PUBLICATION IF EXISTS supabase_realtime;
 CREATE PUBLICATION supabase_realtime;
-ALTER PUBLICATION supabase_realtime ADD TABLE matches, rounds, agent_profiles, soft_moves, agent_directives;
+ALTER PUBLICATION supabase_realtime ADD TABLE matches, rounds, agent_profiles, soft_moves, agent_directives, hosted_agent_salts;
 
 -- Seed Data
 INSERT INTO logic_aliases (logic_id, alias_name, is_verified) 
