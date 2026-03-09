@@ -65,8 +65,6 @@ export function Navbar() {
 
   const navLinks = [
     { href: '/arena', label: 'Arena' },
-    { href: '/falkland', label: 'Falkland Arena' },
-    { href: '/onboarding', label: 'How to Play' },
   ];
 
   return (
