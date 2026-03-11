@@ -22,7 +22,7 @@ if (fs.existsSync(localEnv)) {
 }
 
 const logger = pino({
-  name: 'joshua-foundation',
+  name: 'david-foundation',
   transport: {
     target: 'pino-pretty',
     options: { colorize: true }
@@ -82,7 +82,7 @@ type BrainResponse = {
   model: string;
 };
 
-class JoshuaFoundation {
+class DavidFoundation {
   private provider: ethers.JsonRpcProvider;
   private wallet: ethers.Wallet;
   private escrow: Contract;
@@ -94,7 +94,6 @@ class JoshuaFoundation {
   // Multi-Brain Clients
   private gemini: GoogleGenerativeAI;
   private anthropic: Anthropic | null = null;
-  private kimi: OpenAI | null = null;
 
   constructor() {
     this.provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
@@ -102,9 +101,6 @@ class JoshuaFoundation {
     
     if (process.env.CLAUDE_API_KEY) {
       this.anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
-    }
-    if (process.env.KIMI_API_KEY) {
-      this.kimi = new OpenAI({ apiKey: process.env.KIMI_API_KEY, baseURL: "https://api.moonshot.cn/v1" });
     }
 
     const pk = process.env.HOUSE_BOT_PRIVATE_KEY;
@@ -118,7 +114,7 @@ class JoshuaFoundation {
   }
 
   async run() {
-    logger.info({ address: this.wallet.address }, '🤖 Joshua Foundation Active (Brain Rotation Enabled)');
+    logger.info({ address: this.wallet.address }, '🤖 David Foundation Active (Brain Rotation Enabled)');
     await this.ensureApproval();
 
     // Loop
@@ -151,7 +147,6 @@ class JoshuaFoundation {
       let pokerActive = false;
       const pokerId = "0x941e596b0c66e32eb8186fe5c43b990e128b0469bb9fe233512c2ad8a7b254c5";
 
-      // Check last 10 matches for better visibility
       for (let i = Math.max(1, matchCount - 9); i <= matchCount; i++) {
         const m = await this.escrow.getMatch(i);
         const match = Array.isArray(m) ? { status: m[10], phase: m[9], players: m[0], currentRound: m[5], logicId: m[3] } : m;
@@ -159,10 +154,8 @@ class JoshuaFoundation {
         const logic = match.logicId.toLowerCase();
         const status = Number(match.status);
 
-        // If a poker match is OPEN or ACTIVE, we don't need to create one
         if (logic === pokerId && (status === 0 || status === 1)) {
           pokerActive = true;
-          logger.info({ matchId: i, status }, '📍 Found existing Poker match');
         }
 
         const isInMatch = match.players.some((p: string) => p.toLowerCase() === this.wallet.address.toLowerCase());
@@ -172,12 +165,6 @@ class JoshuaFoundation {
           await this.playRound(i, match);
         }
       }
-
-      if (!pokerActive) {
-        logger.info('empty arena detected, creating new match...');
-        await this.createLiquidity(pokerId);
-      }
-
     } catch (err: any) {
       logger.error({ err: err.message }, 'Match loop error');
     } finally {
@@ -201,18 +188,6 @@ class JoshuaFoundation {
     }
   }
 
-  async createLiquidity(logicId: string) {
-    logger.info({ logicId }, '💰 Creating Liquidity Match');
-    try {
-      const stake = ethers.parseUnits('0.10', 6); // 0.10 USDC
-      const tx = await this.escrow.createMatch(stake, logicId, 2, 3);
-      await tx.wait();
-      logger.info({ hash: tx.hash }, '✅ Match Created');
-    } catch (err: any) {
-      logger.error({ err: err.message }, 'Create failed');
-    }
-  }
-
   async playRound(matchId: number, matchData: any) {
     const round = Number(matchData.currentRound);
     const phase = Number(matchData.phase);
@@ -226,7 +201,6 @@ class JoshuaFoundation {
       const salt = ethers.hexlify(ethers.randomBytes(32));
       const playerIdx = matchData.players.findIndex((p: string) => p.toLowerCase() === this.wallet.address.toLowerCase());
       
-      // THE BRAIN ROTATION
       const response = await this.queryRotatingBrain(matchId, round, matchData.logicId, playerIdx);
       
       const hash = ethers.solidityPackedKeccak256(
@@ -236,21 +210,15 @@ class JoshuaFoundation {
 
       await this.saltManager.saveSalt({ matchId: dbMatchId, round, move: response.move, salt });
       
-      // Save reasoning and taunt to DB
       await supabase.from('rounds').upsert({
         match_id: dbMatchId,
         round_number: round,
         player_address: this.wallet.address.toLowerCase(),
         reasoning: response.reasoning,
-        state_description: response.taunt // We'll repurpose this for the taunt
+        state_description: response.taunt
       }, { onConflict: 'match_id,round_number,player_address' });
 
-      logger.info({ 
-        matchId, 
-        model: response.model, 
-        reasoning: response.reasoning, 
-        taunt: response.taunt 
-      }, '🎲 Committing Move');
+      logger.info({ matchId, model: response.model, reasoning: response.reasoning, taunt: response.taunt }, '🎲 Committing Move');
       const tx = await this.escrow.commitMove(matchId, hash);
       await tx.wait();
     } 
@@ -270,7 +238,7 @@ class JoshuaFoundation {
 
     const activeBrain = brains[Math.floor(Math.random() * brains.length)];
     const context = this.getGameContext(matchId, round, logicId, playerIdx);
-    const prompt = `You are Joshua, a competitive AI agent. ${context}\nRespond ONLY with a valid JSON object. No other text. Example: { "move": 0, "reasoning": "...", "taunt": "..." }`;
+    const prompt = `You are David, a competitive AI agent. ${context}\nRespond ONLY with a valid JSON object. No other text. Example: { "move": 0, "reasoning": "...", "taunt": "..." }`;
 
     try {
       let text = '';
@@ -315,8 +283,7 @@ class JoshuaFoundation {
     } catch (err: any) {
       logger.error({ brain: activeBrain, err: err.message }, 'Brain failed, fallback');
     }
-
-    return { move: 0, reasoning: "Fallback to safety", taunt: "...", model: 'fallback' };
+    return { move: 0, reasoning: "Safety fallback", taunt: "...", model: 'fallback' };
   }
 
   private getGameContext(matchId: number, round: number, logicId: string, playerIdx: number): string {
@@ -365,5 +332,5 @@ class JoshuaFoundation {
   }
 }
 
-const bot = new JoshuaFoundation();
+const bot = new DavidFoundation();
 bot.run().catch(console.error);
