@@ -64,7 +64,9 @@ CREATE TABLE IF NOT EXISTS rounds (
     commit_tx_hash TEXT,
     reveal_tx_hash TEXT,
     state_description TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    reasoning TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(match_id, round_number, player_address)
 );
 
 -- 6. SOFT MOVES (Gasless Arena)
@@ -126,7 +128,6 @@ CREATE TABLE IF NOT EXISTS hosted_agent_salts (
     round_number INTEGER NOT NULL,
     move_value INTEGER NOT NULL,
     salt_value TEXT NOT NULL,
-    revealed BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(agent_address, match_id, round_number)
 );

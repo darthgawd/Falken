@@ -37,6 +37,7 @@ interface Round {
   commit_tx_hash?: string;
   reveal_tx_hash?: string;
   state_description?: string;
+  reasoning?: string;
 }
 
 const MOVE_LABELS: Record<number, string> = {
@@ -321,22 +322,66 @@ export default function MatchDetail({ params }: { params: Promise<{ id: string }
                 </div>
                 <div className={`grid grid-cols-1 ${POKER_LOGIC_IDS.includes(match.game_logic?.toLowerCase()) ? '' : 'md:grid-cols-2 divide-y md:divide-y-0 md:divide-x'} divide-zinc-800 min-h-[320px]`}>
                   {POKER_LOGIC_IDS.includes(match.game_logic?.toLowerCase()) ? (
-                    <div className="p-4 sm:p-10">
-                      <PokerTable 
-                        matchId={match.match_id}
-                        playerA={match.players[0] || 'WAITING'}
-                        playerB={match.players[1] || 'WAITING'}
-                        round={round.round}
-                        logicId={match.game_logic}
-                        playerAMove={round.a?.move}
-                        playerBMove={round.b?.move}
-                        playerASalt={round.a?.salt}
-                        playerBSalt={round.b?.salt}
-                        playerANickname={match.players[0] ? nicknames[match.players[0].toLowerCase()] : 'Player A'}
-                        playerBNickname={match.players[1] ? nicknames[match.players[1].toLowerCase()] : undefined}
-                        isShowdown={round.a?.revealed && round.b?.revealed}
-                        winner={round.winner}
-                      />
+                    <div className="flex flex-col">
+                      <div className="p-4 sm:p-10">
+                        <PokerTable 
+                          matchId={match.match_id}
+                          playerA={match.players[0] || 'WAITING'}
+                          playerB={match.players[1] || 'WAITING'}
+                          round={round.round}
+                          logicId={match.game_logic}
+                          playerAMove={round.a?.move}
+                          playerBMove={round.b?.move}
+                          playerASalt={round.a?.salt}
+                          playerBSalt={round.b?.salt}
+                          playerANickname={match.players[0] ? nicknames[match.players[0].toLowerCase()] : 'Player A'}
+                          playerBNickname={match.players[1] ? nicknames[match.players[1].toLowerCase()] : undefined}
+                          isShowdown={round.a?.revealed && round.b?.revealed}
+                          winner={round.winner}
+                        />
+                      </div>
+                      
+                      {/* Inner Monologue Section */}
+                      {(round.a?.reasoning || round.b?.reasoning) && (
+                        <div className="px-10 pb-10 grid grid-cols-1 md:grid-cols-2 gap-8 border-t border-zinc-800/50 pt-8">
+                          {round.a?.reasoning && (
+                            <div className="space-y-3 text-left">
+                              <div className="flex items-center gap-2">
+                                <Shield className="w-3 h-3 text-blue-500" />
+                                <span className="text-[10px] font-black text-blue-500 uppercase tracking-widest">
+                                  Player A Strategy
+                                </span>
+                              </div>
+                              <div className="text-xs text-zinc-400 leading-relaxed italic bg-blue-500/5 border border-blue-500/10 p-4 rounded-xl">
+                                "{round.a.reasoning}"
+                              </div>
+                              {round.a.state_description && (
+                                <div className="text-[10px] font-bold text-blue-400/60 uppercase tracking-tighter px-2">
+                                  Taunt: {round.a.state_description}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          {round.b?.reasoning && (
+                            <div className="space-y-3 text-right">
+                              <div className="flex items-center gap-2 justify-end">
+                                <span className="text-[10px] font-black text-purple-500 uppercase tracking-widest">
+                                  Player B Strategy
+                                </span>
+                                <Shield className="w-3 h-3 text-purple-500" />
+                              </div>
+                              <div className="text-xs text-zinc-400 leading-relaxed italic bg-purple-500/5 border border-purple-500/10 p-4 rounded-xl text-right">
+                                "{round.b.reasoning}"
+                              </div>
+                              {round.b.state_description && (
+                                <div className="text-[10px] font-bold text-purple-400/60 uppercase tracking-tighter px-2">
+                                  Taunt: {round.b.state_description}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <>
